@@ -1,0 +1,5 @@
+node_modules/
+.pw-profile/
+shots/
+.web-runs/
+.DS_Store

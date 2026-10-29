@@ -1,0 +1,16 @@
+{
+  "name": "kuajing-shipping-auto",
+  "private": true,
+  "version": "1.0.0",
+  "description": "跨境卖货发货台 - 批量改实际发货数并创建发货单",
+  "scripts": {
+    "auto": "node index.js",
+    "dry": "node index.js --dry --debug",
+    "probe": "node index.js probe",
+    "verify": "node verify.js",
+    "test": "node test-dialogs.js"
+  },
+  "dependencies": {
+    "playwright-core": "^1.48.0"
+  }
+}

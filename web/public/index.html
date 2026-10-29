@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="本地发货自动化控制台，执行快照、测试演练与正式发货，实时查看脚本日志。">
+  <title>发货自动化 · 控制台</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar"><a href="/" class="brand"><span class="brand-icon">↗</span> AUTO<span class="brand-divider">/</span><span class="brand-caption">发货自动化</span></a><span class="local-tag"><i></i> 本地工作台</span></header>
+  <main>
+    <section class="intro"><div><div class="eyebrow">OPERATIONS CONSOLE</div><h1>把重复的操作，交给脚本。</h1><p>选择流程，一键执行。每一步进展，都在这里。</p></div><div class="connection"><span id="connection-dot" class="dot"></span><span id="connection-text">正在连接服务</span></div></section>
+    <div id="notice" class="notice" role="status" aria-live="polite">正在同步执行状态，连接后即可操作。</div>
+    <div id="error" class="error" role="alert" hidden></div>
+    <section class="tasks" aria-label="自动化流程">
+      <article class="task-card" data-task="shipping">
+        <div class="card-top"><span class="step">01</span><span class="script-name">shipping-auto</span><span class="task-badge">发货台</span></div>
+        <h2>创建发货单 <span>↗</span></h2><p class="task-description">填写实际发货数，按仓库分组，批量创建发货单。</p>
+        <div class="flow">修改数量 <span>→</span> 选择仓库 <span>→</span> 创建发货单</div>
+        <div class="fields"><label>实际发货数<input name="fill" type="number" min="1" max="99999999" value="99999" required><small>超出上限时，脚本自动填满</small></label><label>最多执行轮数<input name="maxRounds" type="number" min="1" max="10000" value="200" required><small>正式执行的轮数上限</small></label></div>
+        <div class="actions"><button data-mode="probe"><span>▣</span> 快照</button><button data-mode="dry"><span>▷</span> 测试</button><button data-mode="auto" class="primary"><span>▶</span> 正式执行</button></div>
+        <p class="mode-note">快照只探测页面；测试演练 1 轮；正式执行会修改数据。</p><button class="clear-profile" data-clear="shipping">清除登录信息</button>
+      </article>
+      <article class="task-card" data-task="packing">
+        <div class="card-top"><span class="step">02</span><span class="script-name">packing-auto</span><span class="task-badge">发货单列表</span></div>
+        <h2>装箱发货 <span>↗</span></h2><p class="task-description">逐单填写箱数、预约最近取货时间，完成装箱发货。</p>
+        <div class="flow">填写箱数 <span>→</span> 预约取货 <span>→</span> 确认发货</div>
+        <div class="fields"><label>每单箱 / 包数<input name="boxes" type="number" min="1" max="100000" value="1" required><small>每张发货单使用相同箱数</small></label><label>最多执行轮数<input name="maxRounds" type="number" min="1" max="10000" value="200" required><small>正式执行的轮数上限</small></label></div>
+        <label class="checkbox"><input name="reuseShippingProfile" type="checkbox" checked>复用创建发货单的登录状态</label>
+        <div class="actions"><button data-mode="probe"><span>▣</span> 快照</button><button data-mode="dry"><span>▷</span> 测试</button><button data-mode="auto" class="primary"><span>▶</span> 正式执行</button></div>
+        <p class="mode-note">快照会打开装箱抽屉；测试仅演练 1 轮，不确认发货。</p><button class="clear-profile" data-clear="packing">清除登录信息</button><p class="mode-note">勾选复用时，清除的是创建发货单的登录信息。</p>
+      </article>
+    </section>
+    <section class="console-section" aria-labelledby="log-title">
+      <div class="section-heading"><div><span class="eyebrow">LIVE OUTPUT</span><h2 id="log-title">执行日志</h2></div><div class="log-tools"><label class="checkbox"><input type="checkbox" id="follow" checked>自动滚动</label><button id="stop" class="stop-button" disabled>■ 停止执行</button><button id="download" class="text-button" disabled>↓ 下载日志</button></div></div>
+      <div class="terminal"><div class="terminal-bar"><div class="terminal-name"><span class="terminal-lights"><i></i><i></i><i></i></span><span id="run-title">等待执行</span></div><span id="run-status" class="run-status">IDLE</span></div><div id="logs" class="logs" role="log" aria-label="脚本实时输出" aria-live="off" tabindex="0"><div class="log-placeholder"><span>⌘</span><strong>准备就绪，等待你的指令</strong><p>点击上方任一操作，脚本输出将在这里实时显示。</p></div></div><div class="terminal-footer"><span id="run-time">尚未执行任务</span><span id="log-count">stdout / stderr · 实时同步</span></div></div>
+      <p class="console-note"><span class="dot"></span>同一时间只运行一个任务。执行期间可手动停止；其他操作在任务结束后恢复。</p>
+    </section>
+    <section class="snapshots" aria-labelledby="shots-title"><div class="section-heading"><div><span class="eyebrow">CAPTURED MOMENTS</span><h2 id="shots-title">页面快照</h2></div><span id="shot-count" class="muted">读取中</span></div><div id="shots" class="shot-grid"></div><p id="shots-empty" class="empty" hidden>还没有快照，执行「快照」后会自动显示截图。</p></section>
+    <footer>本机 Chrome 运行 · 首次使用请在弹出的浏览器中登录<span>AUTO / LOCAL CONSOLE</span></footer>
+  </main>
+</body>
+</html>
