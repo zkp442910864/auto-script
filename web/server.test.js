@@ -12,7 +12,7 @@ const { createApp, taskCommand } = require('./server');
 
 async function fixture(t, spawnProcess) {
   const runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'auto-console-test-'));
-  const app = createApp({ spawnProcess, runDir, profileRoot: runDir });
+  const app = createApp({ spawnProcess, runDir, profileRoot: runDir, dataRoot: runDir });
   app.server.listen(0, '127.0.0.1');
   await once(app.server, 'listening');
   t.after(async () => { await app.shutdown(); fs.rmSync(runDir, { recursive: true, force: true }); });
@@ -231,4 +231,54 @@ test('主动快照抓取每次最新 DOM，保留多页与 frame', async (t) => 
   const read = name => JSON.parse(fs.readFileSync(path.join(directory, name.replace('.png', '.json'))));
   assert.match(read(first[0]).frames[0].html, /第一步/);
   assert.match(read(second[0]).frames[0].html, /动态节点/);
+});
+
+test('Temu 固定采集命令、验证等待重连、继续、结果下载及互斥', async (t) => {
+  const command = taskCommand({ task: 'temu', mode: 'collect' });
+  assert.equal(path.basename(command.cwd), 'temu-auto');
+  assert.deepEqual(command.args, ['index.js', '--limit=200']);
+  for (const body of [{ task: 'temu', mode: 'auto' }, { task: 'shipping', mode: 'collect' }, { task: 'temu', mode: 'collect', options: { limit: 201 } }, { task: 'temu', mode: 'collect', options: { limit: '200' } }]) assert.throws(() => taskCommand(body));
+  const filename = 'temu-123-abcdef.json';
+  const f = await fixture(t, (_exe, _args, options) => {
+    assert.ok(options.stdio.includes('ipc'));
+    return spawn(process.execPath, ['-e', `
+      process.on('message', m => {
+        if (m.type !== 'resume') return;
+        process.send({ type: 'user-action', waiting: false });
+        process.send({ type: 'collection-progress', count: 200, target: 200, status: 'complete', files: ['${filename}'] }, () => process.disconnect());
+      });
+      process.send({ type: 'collection-progress', count: 40, target: 200, status: 'collecting', files: ['${filename}', '../index.js'] });
+      process.send({ type: 'user-action', waiting: true, reason: '请完成验证' });
+    `], { stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
+  });
+  const dir = path.join(f.runDir, 'temu-auto', 'data');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, filename), '{"items":[]}');
+  fs.symlinkSync(path.join(f.runDir, 'outside.json'), path.join(dir, 'temu-124-abcdef.json'));
+  fs.writeFileSync(path.join(f.runDir, 'outside.json'), '{}');
+  assert.equal((await f.request({ task: 'temu', mode: 'collect' })).status, 202);
+  const run = await waitUntil(async () => {
+    const state = await (await fetch(`${f.base}/api/state`)).json();
+    return state.run.waitingForUser && state.run;
+  });
+  assert.equal(run.collection.count, 40);
+  assert.deepEqual(run.resultFiles, [filename]);
+  assert.equal(run.waitReason, '请完成验证');
+  assert.equal((await f.request({ task: 'shipping', mode: 'auto' })).status, 409);
+  const resume = (id) => fetch(`${f.base}/api/resume`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) });
+  assert.equal((await resume('old')).status, 409);
+  assert.equal((await resume(run.id)).status, 202);
+  const completed = await waitUntil(async () => {
+    const state = await (await fetch(`${f.base}/api/state`)).json();
+    return state.run.status === 'succeeded' && state.run;
+  });
+  assert.equal(completed.waitingForUser, false);
+  assert.equal(completed.collection.count, 200);
+  assert.equal((await resume(run.id)).status, 409);
+  const download = await fetch(`${f.base}/api/data/temu/${filename}`);
+  assert.equal(download.status, 200);
+  assert.match(download.headers.get('content-disposition'), /attachment/);
+  assert.deepEqual(await download.json(), { items: [] });
+  assert.equal((await fetch(`${f.base}/api/data/temu/..%2Findex.js`)).status, 404);
+  assert.equal((await fetch(`${f.base}/api/data/temu/temu-124-abcdef.json`)).status, 404);
 });

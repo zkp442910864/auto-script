@@ -32,3 +32,12 @@
 - `POST /api/clear-profile` 只接受 shipping 或 packing 对应的固定配置目录，任务运行时禁止清除。前端在清除前说明涉及的配置和需要重新登录。
 
 - 主动快照模式 `manual` 使用固定脚本 `web/manual-snapshot.js`，通过 Node IPC 接收 `/api/snapshot` 的抓取请求。会话保持全局锁，运行期间额外允许「抓取当前页面」；不会自动执行 probe 或业务提交。快照 JSON 仅通过受限 `/api/dom/:task/:file` 附件下载，不作为 HTML 执行。
+
+## Temu 采集
+
+- `temu-auto/index.js` 为固定贴纸搜索 URL 的有头采集器；`collector.js` 管理 DOM 提取、保序去重、滚动/加载更多和 JSON/CSV 增量保存。`notify.js` 用无 shell 的参数数组发送 macOS / Windows 本机通知。
+- Web 调用 `{task:'temu', mode:'collect', options:{limit:200}}`，limit 限 1–200，仅此任务允许 collect。保持与发货/装箱共享全局任务锁，通过 IPC 同步 `user-action` / `collection-progress`；`POST /api/resume` 必须校验当前任务 id、等待状态和停止状态。
+- 验证必须由用户手动处理；不得自动点击验证码。遇未知页面或加载停滞同样等待用户。通知失败不应终止等待。
+- 数据保存在被忽略的 `temu-auto/data/`；结果经固定 `/api/data/temu/:file` 附件接口下载，校验文件名及 realpath。主图保存为链接，未展示字段留空并统计缺失，未采满必须标记 partial，避免以退出码或空数据冒充完整结果。
+- 默认 Chrome 使用独立 `.pw-profile/`；CLI `--extension` 使用 Chromium 与 `.pw-profile-chromium/`，需先安装 Playwright Chromium，不得加载个人默认 Chrome 配置。Web 不接受任意扩展/脚本路径。
+- `npm test` 包含本地真实浏览器采集夹具（要求已安装 Google Chrome）与模拟子进程控制台测试。真实站点可能要求登录，测试不得代替用户完成验证或把本地夹具描述为已采到真实 200 条。
