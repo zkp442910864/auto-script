@@ -14,6 +14,21 @@
     <section class="intro"><div><div class="eyebrow">OPERATIONS CONSOLE</div><h1>把重复的操作，交给脚本。</h1><p>选择流程，一键执行。每一步进展，都在这里。</p></div><div class="connection"><span id="connection-dot" class="dot"></span><span id="connection-text">正在连接服务</span></div></section>
     <div id="notice" class="notice" role="status" aria-live="polite">正在同步执行状态，连接后即可操作。</div>
     <div id="error" class="error" role="alert" hidden></div>
+    <section class="task-card login-card" data-task="login" aria-labelledby="login-title">
+      <div class="card-top"><span class="step">00</span><span class="script-name">login-auto</span><span id="login-status" class="task-badge">读取登录状态</span></div>
+      <h2 id="login-title">登录与前置准备 <span>↗</span></h2>
+      <p class="task-description">输入手机号或邮箱和密码，脚本自动打开 Chrome 并登录，之后可手动完成店铺选择等前置操作。</p>
+      <form id="login-form">
+        <div id="login-fields" class="fields">
+          <label>账号<input id="login-username" name="username" type="text" maxlength="256" autocomplete="username" placeholder="手机号或子账号邮箱" required></label>
+          <label>密码<input id="login-password" name="password" type="password" maxlength="1024" autocomplete="current-password" placeholder="请输入登录密码" required></label>
+        </div>
+        <label id="login-consent-label" class="checkbox login-consent"><input id="login-consent" type="checkbox" required>我已阅读并同意商家后台《账号使用须知》《隐私政策》，允许脚本勾选后登录</label>
+        <p id="login-saved" class="mode-note" hidden>已保存浏览器登录信息，直接打开页面继续操作；若已失效，请在 Chrome 中重新登录。</p>
+        <div class="login-actions"><button id="login-start" class="primary" type="submit">登录并打开页面</button><button id="login-stop" class="stop-button" type="button" hidden>■ 停止准备</button><button class="clear-profile" data-clear="login" type="button">清除登录信息</button></div>
+      </form>
+      <p class="mode-note"><span id="login-cache-note">账号密码自动缓存在当前浏览器本地，刷新后恢复；点击「清除登录信息」可删除。</span>此脚本会持续运行，直到手动关闭 Chrome 或点击「停止准备」。</p>
+    </section>
     <section class="tasks" aria-label="自动化流程">
       <article class="task-card" data-task="shipping">
         <div class="card-top"><span class="step">01</span><span class="script-name">shipping-auto</span><span class="task-badge">发货台</span></div>
@@ -28,9 +43,9 @@
         <h2>装箱发货 <span>↗</span></h2><p class="task-description">逐单填写箱数、预约最近取货时间，完成装箱发货。</p>
         <div class="flow">填写箱数 <span>→</span> 预约取货 <span>→</span> 确认发货</div>
         <div class="fields"><label>每单箱 / 包数<input name="boxes" type="number" min="1" max="100000" value="1" required><small>每张发货单使用相同箱数</small></label><label>最多执行轮数<input name="maxRounds" type="number" min="1" max="10000" value="200" required><small>正式执行的轮数上限</small></label></div>
-        <label class="checkbox"><input name="reuseShippingProfile" type="checkbox" checked>复用创建发货单的登录状态</label>
+        <p class="mode-note">自动使用前置步骤保存的 Chrome 登录状态。</p>
         <div class="actions"><button data-mode="probe"><span>▣</span> 快照</button><button data-mode="manual">主动快照</button><button data-mode="dry"><span>▷</span> 测试</button><button data-mode="auto" class="primary"><span>▶</span> 正式执行</button></div>
-        <p class="mode-note">快照会打开装箱抽屉；测试仅演练 1 轮，不确认发货。</p><button class="clear-profile" data-clear="packing">清除登录信息</button><p class="mode-note">勾选复用时，清除的是创建发货单的登录信息。</p>
+        <p class="mode-note">快照会打开装箱抽屉；测试仅演练 1 轮，不确认发货。</p><button class="clear-profile" data-clear="packing">清除登录信息</button>
       </article>
     </section>
     <section class="console-section" aria-labelledby="log-title">
@@ -39,7 +54,7 @@
       <p class="console-note"><span class="dot"></span>同一时间只运行一个任务。执行期间可手动停止；其他操作在任务结束后恢复。</p>
     </section>
     <section class="snapshots" aria-labelledby="shots-title"><div class="section-heading"><div><span class="eyebrow">CAPTURED MOMENTS</span><h2 id="shots-title">页面快照</h2></div><span id="shot-count" class="muted">读取中</span></div><p class="mode-note">主动快照：在 Chrome 中手动操作到目标步骤，再点击「抓取当前页面」。可连续抓取，保存所有标签页截图及各 frame 的 DOM，结束时点击「结束快照」。</p><div id="shots" class="shot-grid"></div><p id="shots-empty" class="empty" hidden>还没有快照，执行「快照」后会自动显示截图。</p></section>
-    <footer>本机 Chrome 运行 · 首次使用请在弹出的浏览器中登录<span>AUTO / LOCAL CONSOLE</span></footer>
+    <footer>本机 Chrome 运行 · 先完成登录与前置准备，再执行自动化流程<span>AUTO / LOCAL CONSOLE</span></footer>
   </main>
 </body>
 </html>

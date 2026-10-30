@@ -25,7 +25,7 @@
  *   --boxes=1          发货总箱/包数，默认 1
  *   --max-rounds=200   最多处理多少单
  *   --slowmo=120       每步延迟（毫秒），页面卡就调大
- *   --profile=<dir>    独立 Chrome 配置目录，默认 ./.pw-profile
+ *   --profile=<dir>    Chrome 配置目录，默认 ../shipping-auto/.pw-profile
  *   --cdp=http://127.0.0.1:9222   复用已开调试端口的 Chrome
  *   --keep-open        跑完不关浏览器（默认关掉，好让脚本正常退出）
  *   --debug            详细日志
@@ -72,7 +72,7 @@ const flagVal = (n) => {
 const CFG = {
   url: 'https://seller.kuajingmaihuo.com/main/order-manager/shipping-list',
   boxCount: Number(flagVal('boxes') || process.env.BOXES || 1),
-  profileDir: flagVal('profile') || process.env.PROFILE || path.join(__dirname, '.pw-profile'),
+  profileDir: flagVal('profile') || process.env.PROFILE || path.resolve(__dirname, '../shipping-auto/.pw-profile'),
   shotDir: path.join(__dirname, 'shots'),
   maxRounds: Number(flagVal('max-rounds') || process.env.MAX_ROUNDS || 200),
   slowMo: Number(flagVal('slowmo') || process.env.SLOWMO || 120),

@@ -7,7 +7,7 @@
 - 根目录 `npm start` 启动 `web/server.js`，默认地址 `http://127.0.0.1:3000`；`PORT` 可改端口。Web 只用 Node 内置模块，不需要打包。
 - `npm run setup` 安装两套自动化脚本的依赖，需要本机 Google Chrome。`npm test` 运行控制台集成测试；`npm run dev` 监视服务文件变化，开发时请勿在业务任务运行中重启。
 - 前端在 `web/public/`，使用原生 HTML、CSS、JavaScript。界面为中文，保持桌面和移动端可用。
-- `POST /api/run` 接收 `{task: 'shipping'|'packing', mode: 'probe'|'dry'|'auto', options: {...}}`。参数仅允许数值型 `maxRounds`、`slowMo`、`fill` / `boxes`，装箱支持布尔值 `reuseShippingProfile`。不得提供任意命令、脚本路径或 shell 执行入口。
+- `POST /api/run` 接收 `{task: 'shipping'|'packing', mode: 'probe'|'dry'|'auto', options: {...}}`。参数仅允许数值型 `maxRounds`、`slowMo`、`fill` / `boxes`，装箱固定复用 `shipping-auto/.pw-profile`，无需登录配置选项。不得提供任意命令、脚本路径或 shell 执行入口。
 - `GET /api/events` 为 SSE，`state` 事件同步当前任务和日志缓冲，`log` 事件推送 stdout / stderr；带心跳和自动重连。`GET /api/state` 提供同一状态。`instance` / `revision` 用于避免旧响应覆盖新状态。
 - `GET /api/shots` 枚举允许目录的 PNG，`GET /api/shots/:task/:file` 返回原图；不向浏览器提供可执行的 `probe.html`。`GET /api/log` 下载最新任务完整日志。
 
@@ -29,6 +29,13 @@
 
 - `POST /api/stop` 接收当前任务 `id`，发送 SIGTERM；停止期间保持运行锁，等待子进程 close 后标记 stopped。停止不会撤销已提交的业务操作。
 
-- `POST /api/clear-profile` 只接受 shipping 或 packing 对应的固定配置目录，任务运行时禁止清除。前端在清除前说明涉及的配置和需要重新登录。
+- `POST /api/clear-profile` 接受 shipping 或 packing 作为兼容别名，均清除固定的 `shipping-auto/.pw-profile`，任务运行时禁止清除。前端在清除前说明涉及的配置和需要重新登录。
 
 - 主动快照模式 `manual` 使用固定脚本 `web/manual-snapshot.js`，通过 Node IPC 接收 `/api/snapshot` 的抓取请求。会话保持全局锁，运行期间额外允许「抓取当前页面」；不会自动执行 probe 或业务提交。快照 JSON 仅通过受限 `/api/dom/:task/:file` 附件下载，不作为 HTML 执行。
+
+- 登录前置使用独立 `login-auto/index.js`，`POST /api/run` 接收 `{task:'login', mode:'login', options:{username?, password?, acceptAgreement?:boolean}}`。首次需成对账号密码，已确认登录时可省略。脚本与发货/装箱同样使用 `launchPersistentContext` 启动有界面的本机 Chrome，固定共用 `shipping-auto/.pw-profile`，不使用日常 Chrome 配置或内置浏览器。手机号和邮箱自动切换登录标签；只有用户在控制台明确勾选协议授权，脚本才勾选站点协议并提交。账号密码仅通过 IPC 传递，禁止放入命令行、公开状态或日志，尤其不可输出 Playwright fill 异常的原始消息或堆栈。此模式持续保留浏览器直到用户关窗、点击停止或服务关闭，不因登录成功、超时、导航或表单错误自动结束。准备结束后释放全局锁，用户再手动运行后续流程。
+- `/api/state` 和 SSE state 的 `profiles` 仅含共享配置 `shipping.saved`，以登录成功标记判断，不以 Cookie 数据库文件存在作为已登录证据。检测到登录页时清除过期标记。登录脚本复用 `shipping-auto/node_modules/playwright-core`，无需第三份依赖；测试只用本地页面和模拟进程。
+
+- `npm run test:login` 用本机 Chrome 对本地模拟登录页验证自动切换、字段填充、协议授权和只提交一次；`node login-auto/index.js --probe` 用脚本本身启动的共享 Chrome 抓取真实登录页结构，完成后保留窗口。登录截图遮挡 input，字段 JSON 不保存输入值，产物在忽略的 `login-auto/shots/`。
+
+- 用户明确要求在控制台本地缓存账号密码：前端用 `localStorage` 的 `auto-console.login.v1` 保存并恢复输入，不因提交或登录状态变化清空；「清除登录信息」成功后同时移除该缓存并清空表单。不缓存登录协议授权，不向日志、SSE 或命令行暴露凭据。

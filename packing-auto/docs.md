@@ -61,8 +61,8 @@ npm run dry
 npm run auto:reuse
 ```
 
-`probe:reuse` / `auto:reuse` 复用 `shipping-auto/.pw-profile` 里已登录的 Chrome 配置，
-免去重新扫码/登录。用独立配置目录则跑 `npm run probe` / `npm run auto`，首次需在弹窗里手动登录
+所有命令默认复用 `shipping-auto/.pw-profile` 中前置登录保存的 Chrome 状态，
+免去重新扫码/登录。`probe:reuse` / `auto:reuse` 保留为兼容命令；CLI 如需其他目录，可显式传 `--profile=<dir>`
 （脚本会等你最多 5 分钟）。
 
 ### 常用命令
@@ -87,7 +87,7 @@ npm run auto:reuse
 | `--boxes=1` | `BOXES` | `1` | 发货总箱/包数 |
 | `--max-rounds=200` | `MAX_ROUNDS` | `200` | 最多处理多少单 |
 | `--slowmo=120` | `SLOWMO` | `120` | 每步延迟（毫秒），页面卡就调大 |
-| `--profile=<dir>` | `PROFILE` | `./.pw-profile` | 独立 Chrome 配置目录（存登录态） |
+| `--profile=<dir>` | `PROFILE` | `../shipping-auto/.pw-profile` | Chrome 配置目录，默认与前置登录和创建发货单共用 |
 | `--cdp=http://127.0.0.1:9222` | `CDP` | 空 | 复用已开调试端口的 Chrome |
 | `--keep-open` | — | 关 | 跑完不关浏览器（默认关掉，好让脚本正常退出） |
 | `--dry` | `DRY=1` | 关 | 演练，不点「确认发货」 |
@@ -240,7 +240,7 @@ packing-auto/
 ├── package.json   # npm scripts
 ├── docs.md        # 本文档
 ├── node_modules/  # 复用 shipping-auto
-├── .pw-profile/   # Chrome 配置目录（登录态）
+├── .pw-profile/   # 旧独立目录（默认改为使用 ../shipping-auto/.pw-profile）
 └── shots/         # 截图与 DOM 快照
 ```
 

@@ -7,19 +7,30 @@ const { spawn } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
 
 const ROOT = path.resolve(__dirname, '..');
+const LOGIN_TASK = { id: 'login', name: '登录与前置准备', directory: 'login-auto' };
 const TASKS = [
   { id: 'shipping', name: '创建发货单', directory: 'shipping-auto', description: '修改实际发货数，按仓库分组创建发货单。' },
   { id: 'packing', name: '装箱发货', directory: 'packing-auto', description: '填写箱数、预约取货时间，逐单确认发货。' },
 ];
-const MODES = { probe: '快照', dry: '测试演练', auto: '正式执行', manual: '主动快照' };
+const MODES = { probe: '快照', dry: '测试演练', auto: '正式执行', manual: '主动快照', login: '登录 / 打开页面' };
 const MAX_LOG_CHARS = 600000;
 
 function taskCommand(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('请求参数必须是对象');
-  const task = TASKS.find((item) => item.id === input.task);
-  if (!task || !Object.hasOwn(MODES, input.mode)) throw new Error('未知脚本或执行模式');
+  const task = input.task === 'login' ? LOGIN_TASK : TASKS.find((item) => item.id === input.task);
+  if (!task || !Object.hasOwn(MODES, input.mode) || (task.id === 'login') !== (input.mode === 'login')) throw new Error('未知脚本或执行模式');
   const options = input.options ?? {};
   if (!options || typeof options !== 'object' || Array.isArray(options)) throw new Error('执行参数格式错误');
+  if (task.id === 'login') {
+    if (options.profile !== undefined && options.profile !== 'shipping') throw new Error('登录统一使用共享 Chrome 配置，无需选择');
+    const profile = 'shipping';
+    const username = options.username ?? '';
+    const password = options.password ?? '';
+    if (typeof username !== 'string' || typeof password !== 'string' || username.length > 256 || password.length > 1024) throw new Error('账号或密码格式错误');
+    if (Boolean(username.trim()) !== Boolean(password)) throw new Error('请同时填写账号和密码，或使用已保存的登录信息');
+    if (options.acceptAgreement !== undefined && typeof options.acceptAgreement !== 'boolean') throw new Error('登录协议授权必须是布尔值');
+    return { task, args: ['index.js'], cwd: path.join(ROOT, task.directory), credentials: { username: username.trim(), password, acceptAgreement: options.acceptAgreement === true }, profile };
+  }
   const args = ['index.js'];
   if (task.id === 'shipping') args.push('--close-browser');
   if (input.mode === 'probe') args.push('probe');
@@ -34,11 +45,11 @@ function taskCommand(input) {
   if (task.id === 'shipping') number('fill', 99999, 1, 99999999, 'fill');
   if (task.id === 'packing') {
     number('boxes', 1, 1, 100000, 'boxes');
-    if (options.reuseShippingProfile === true) args.push(`--profile=${path.join(ROOT, 'shipping-auto', '.pw-profile')}`);
+    args.push(`--profile=${path.join(ROOT, 'shipping-auto', '.pw-profile')}`);
   }
   if (input.mode === 'manual') {
     args.splice(0, args.length, path.join(__dirname, 'manual-snapshot.js'), task.id);
-    if (task.id === 'packing' && options.reuseShippingProfile === true) args.push('--reuse');
+    if (task.id === 'packing') args.push('--reuse');
   }
   return { task, args, cwd: path.join(ROOT, task.directory) };
 }
@@ -52,7 +63,15 @@ function createApp({ spawnProcess = spawn, runDir = path.join(ROOT, '.web-runs')
   let closing = false;
   let snapshotPending = null;
   let shuttingDown = null;
-  const state = () => ({ instance, revision, tasks: TASKS, modes: MODES, run: current });
+  function profiles() {
+    // Chrome creates a Cookies database even when nobody has logged in. Only
+    // treat a successfully observed authenticated session as saved login data.
+    const marker = path.join(profileRoot, 'shipping-auto', '.pw-profile', '.login-state.json');
+    let saved = false;
+    try { saved = Boolean(JSON.parse(fs.readFileSync(marker, 'utf8')).savedAt); } catch {}
+    return { shipping: { saved } };
+  }
+  const state = () => ({ instance, revision, tasks: [LOGIN_TASK, ...TASKS], modes: MODES, profiles: profiles(), run: current });
   function send(response, event, data) {
     // Slow clients reconnect and receive the bounded current state instead of accumulating output.
     if (!response.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)) response.destroy();
@@ -152,9 +171,11 @@ function createApp({ spawnProcess = spawn, runDir = path.join(ROOT, '.web-runs')
         const task = TASKS.find((item) => item.id === profile);
         if (!task) return json(response, 400, { error: '未知登录配置' });
         if (closing || current?.status === 'running') return json(response, 409, { error: '任务运行中，无法清除登录信息' });
-        const directory = path.join(profileRoot, task.directory, '.pw-profile');
+        const directory = path.join(profileRoot, 'shipping-auto', '.pw-profile');
         fs.rmSync(directory, { recursive: true, force: true });
-        return json(response, 200, { message: `${task.name}的登录信息已清除，下次执行时需要重新登录` });
+        revision++;
+        broadcast('state', state());
+        return json(response, 200, { message: '共享 Chrome 登录信息已清除，下次执行时需要重新登录' });
       }
       if (request.method === 'POST' && url.pathname === '/api/snapshot') {
         if (!request.headers['content-type']?.startsWith('application/json')) return json(response, 415, { error: '请使用 JSON 请求' });
@@ -203,14 +224,21 @@ function createApp({ spawnProcess = spawn, runDir = path.join(ROOT, '.web-runs')
           if (Buffer.byteLength(body) > 8192) return json(response, 413, { error: '请求过大' });
         }
         let command;
-        try { command = taskCommand(JSON.parse(body)); } catch (error) { return json(response, 400, { error: error.message }); }
+        let mode;
+        try {
+          const input = JSON.parse(body);
+          command = taskCommand(input);
+          mode = input.mode;
+        } catch (error) { return json(response, 400, { error: error.message }); }
+        body = '';
         if (closing) return json(response, 503, { error: '服务正在关闭' });
         if (current?.status === 'running') return json(response, 409, { error: '已有任务执行中，请等待结束' });
+        if (command.task.id === 'login' && !command.credentials.username && !profiles()[command.profile].saved) return json(response, 400, { error: '首次登录请填写账号和密码' });
         fs.mkdirSync(runDir, { recursive: true });
         const id = `${Date.now()}-${randomUUID()}`;
         const logPath = path.join(runDir, `${id}.log`);
         fs.writeFileSync(logPath, '');
-        current = { id, task: command.task.id, taskName: command.task.name, mode: JSON.parse(body).mode, status: 'running', startedAt: new Date().toISOString(), endedAt: null, exitCode: null, logs: [], logChars: 0, logPath, command: `node ${command.args.join(' ')}` };
+        current = { id, task: command.task.id, taskName: command.task.name, mode, ...(command.profile ? { profile: command.profile } : {}), status: 'running', startedAt: new Date().toISOString(), endedAt: null, exitCode: null, logs: [], logChars: 0, logPath, command: `node ${command.args.join(' ')}` };
         revision++;
         broadcast('state', state());
         append('system', `开始执行：${command.task.name} · ${MODES[current.mode]}\n$ ${current.command}\n\n`);
@@ -232,11 +260,23 @@ function createApp({ spawnProcess = spawn, runDir = path.join(ROOT, '.web-runs')
           child = spawnProcess(process.execPath, command.args, {
             cwd: command.cwd,
             env: { ...process.env, DRY: current.mode === 'dry' ? '1' : '0', DEBUG: current.mode === 'dry' ? '1' : '0', CDP: '', PROFILE: '', FORCE_COLOR: '0', NO_COLOR: '1' },
-            stdio: current.mode === 'manual' ? ['ignore', 'pipe', 'pipe', 'ipc'] : ['ignore', 'pipe', 'pipe'], shell: false,
+            stdio: ['manual', 'login'].includes(current.mode) ? ['ignore', 'pipe', 'pipe', 'ipc'] : ['ignore', 'pipe', 'pipe'], shell: false,
           });
           child.on('message', (message) => {
             if (!message || typeof message !== 'object') return;
-            if (message.type === 'snapshot-ready') { current.snapshotReady = true; revision++; broadcast('state', state()); }
+            if (current.mode === 'login' && message.type === 'login-input-ready' && command.credentials) {
+              const credentials = command.credentials;
+              delete command.credentials;
+              child.send({ type: 'login-credentials', ...credentials }, (error) => {
+                if (error && !finished) {
+                  append('stderr', '登录信息传递失败，请停止后重试。\n');
+                  child?.kill('SIGTERM');
+                }
+              });
+            }
+            if (current.mode === 'login' && message.type === 'login-saved') { revision++; broadcast('state', state()); }
+            if (current.mode === 'login' && message.type === 'login-required') { revision++; broadcast('state', state()); }
+            if (current.mode === 'manual' && message.type === 'snapshot-ready') { current.snapshotReady = true; revision++; broadcast('state', state()); }
             if (message.type === 'snapshot-result' && snapshotPending?.id === message.id) snapshotPending.done(message);
           });
           for (const stream of ['stdout', 'stderr']) {

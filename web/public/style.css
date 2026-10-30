@@ -3,3 +3,5 @@
 .stop-button{border-color:#d6a99c;color:#a34931;background:#fff7f3;padding:7px 12px;font-weight:600}.stop-button:hover:enabled{background:#fce7df}
 
 .clear-profile{align-self:flex-start;margin-top:10px;padding:4px 0;border:0;background:transparent;color:#9b6b5c;font-size:10px}.clear-profile:hover:enabled{background:transparent;text-decoration:underline}
+
+.login-card{margin-bottom:22px}.login-card h2{margin-top:18px}.login-card form{margin-top:20px}.login-consent{margin-top:14px;align-items:flex-start;line-height:1.7}.login-consent input{flex-shrink:0;margin-top:3px}.login-actions{display:flex;flex-wrap:wrap;align-items:center;gap:22px;margin-top:18px}.login-actions .primary{min-width:160px}.login-actions .clear-profile{margin:0;align-self:center}@media(max-width:760px){.login-card #login-fields{grid-template-columns:1fr}.log-tools{flex-wrap:wrap;justify-content:flex-end;gap:10px}.section-heading{align-items:flex-start}}

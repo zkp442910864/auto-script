@@ -12,16 +12,66 @@ let shots = [];
 let refreshPending = false;
 let instance = null;
 let revision = -1;
+let profiles = {};
+const LOGIN_CACHE_KEY = 'auto-console.login.v1';
+
+function cacheLogin() {
+  try {
+    const username = $('#login-username').value;
+    const password = $('#login-password').value;
+    if (username || password) localStorage.setItem(LOGIN_CACHE_KEY, JSON.stringify({ username, password }));
+    else localStorage.removeItem(LOGIN_CACHE_KEY);
+    $('#login-cache-note').textContent = '账号密码自动缓存在当前浏览器本地，刷新后恢复；点击「清除登录信息」可删除。';
+  } catch {
+    $('#login-cache-note').textContent = '当前浏览器无法保存本地缓存，本页输入仍会保留。';
+  }
+}
+function restoreLogin() {
+  try {
+    const value = JSON.parse(localStorage.getItem(LOGIN_CACHE_KEY));
+    if (!value || typeof value.username !== 'string' || typeof value.password !== 'string' || value.username.length > 256 || value.password.length > 1024) return;
+    $('#login-username').value = value.username;
+    $('#login-password').value = value.password;
+  } catch { /* Unavailable storage or an invalid cache must not block the console. */ }
+}
+function resetLoginFields() {
+  $('#login-username').value = '';
+  $('#login-password').value = '';
+  $('#login-consent').checked = false;
+}
+restoreLogin();
+for (const input of [$('#login-username'), $('#login-password')]) {
+  input.addEventListener('input', cacheLogin);
+  input.addEventListener('change', cacheLogin);
+}
+window.addEventListener('storage', (event) => {
+  if ((event.key === LOGIN_CACHE_KEY || event.key === null) && event.newValue === null) resetLoginFields();
+});
+
+function loginControls() {
+  const saved = Boolean(profiles.shipping?.saved);
+  $('#login-fields').hidden = saved;
+  $('#login-saved').hidden = !saved;
+  $('#login-username').required = !saved;
+  $('#login-password').required = !saved;
+  $('#login-consent-label').hidden = saved;
+  $('#login-consent').required = !saved;
+  $('#login-start').textContent = saved ? '打开页面' : '登录并打开页面';
+  $('#login-status').textContent = saved ? '已保存登录信息' : '首次登录';
+}
 
 function controls() {
   const busy = !connected || pending || run?.status === 'running';
   document.body.classList.toggle('busy', busy);
-  document.querySelectorAll('button, input').forEach((item) => { item.disabled = busy; });
+  document.querySelectorAll('button, input, select').forEach((item) => { item.disabled = busy; });
   $('#download').disabled = busy || !run;
   $('#stop').disabled = !connected || pending || run?.status !== 'running' || Boolean(run?.stopRequested);
+  $('#login-stop').hidden = run?.task !== 'login' || run?.status !== 'running';
+  $('#login-stop').disabled = $('#stop').disabled;
+  $('#login-stop').textContent = run?.stopRequested ? '正在停止…' : '■ 停止准备';
   $('#capture').disabled = !connected || capturing || pending || run?.status !== 'running' || run?.mode !== 'manual' || !run?.snapshotReady || Boolean(run?.stopRequested);
   $('#capture').textContent = capturing ? '正在抓取…' : '▣ 抓取当前页面';
-  $('#stop').textContent = run?.stopRequested ? '正在停止…' : run?.mode === 'manual' ? '结束快照' : '■ 停止执行';
+  $('#stop').textContent = run?.status === 'running' && run.stopRequested ? '正在停止…' : run?.mode === 'manual' ? '结束快照' : run?.mode === 'login' ? '■ 停止准备' : '■ 停止执行';
   document.querySelectorAll('.shot, .brand').forEach((link) => {
     link.setAttribute('aria-disabled', String(busy));
     link.tabIndex = busy ? -1 : 0;
@@ -29,11 +79,11 @@ function controls() {
   document.querySelectorAll('.task-card').forEach((card) => card.classList.toggle('active', run?.status === 'running' && card.dataset.task === run.task));
   const notice = $('#notice');
   notice.classList.toggle('running', Boolean(run?.status === 'running'));
-  notice.textContent = !connected ? '服务连接已断开，正在自动重连；同步状态后才能继续操作。' : pending ? '正在启动脚本，请稍候…' : run?.status === 'running' ? `正在${run.stopRequested ? '停止' : '执行'}「${run.taskName} · ${modeLabel(run.mode)}」，其他操作已锁定。` : '准备就绪 · 建议先查看快照，再测试演练，最后正式执行。';
+  notice.textContent = !connected ? '服务连接已断开，正在自动重连；同步状态后才能继续操作。' : pending ? '正在启动脚本，请稍候…' : run?.status === 'running' ? run.mode === 'login' && !run.stopRequested ? '前置准备会话运行中 · 请在 Chrome 中完成操作，关闭窗口或点击「停止准备」后即可运行后续脚本。' : `正在${run.stopRequested ? '停止' : '执行'}「${run.taskName} · ${modeLabel(run.mode)}」，其他操作已锁定。` : '准备就绪 · 先完成登录与前置准备，再查看快照、测试演练，最后正式执行。';
   $('#connection-dot').classList.toggle('offline', !connected);
   $('#connection-text').textContent = connected ? '服务已连接' : '正在连接服务';
 }
-function modeLabel(mode) { return { probe: '快照', dry: '测试演练', auto: '正式执行', manual: '主动快照' }[mode] || mode; }
+function modeLabel(mode) { return { probe: '快照', dry: '测试演练', auto: '正式执行', manual: '主动快照', login: '登录 / 打开页面' }[mode] || mode; }
 function clock(value) { return new Date(value).toLocaleString('zh-CN', { hour12: false }); }
 function updateTime() {
   if (!run) return;
@@ -53,6 +103,8 @@ function applyState(data) {
   if (data.instance === instance && data.revision < revision) return;
   instance = data.instance;
   revision = data.revision;
+  profiles = data.profiles || {};
+  loginControls();
   const previous = run;
   run = data.run;
   connected = true;
@@ -108,6 +160,32 @@ async function refreshShots() {
   } catch (error) { $('#shot-count').textContent = error.message; }
   finally { refreshPending = false; }
 }
+$('#login-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (!connected || pending || run?.status === 'running') return;
+  cacheLogin();
+  const options = {};
+  if (!profiles.shipping?.saved) {
+    options.username = $('#login-username').value.trim();
+    options.password = $('#login-password').value;
+    options.acceptAgreement = $('#login-consent').checked;
+    if (!options.username || !options.password) {
+      $('#error').textContent = '请填写账号和密码'; $('#error').hidden = false; return;
+    }
+  }
+  pending = true; $('#error').hidden = true; controls();
+  try {
+    const response = await fetch('/api/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ task: 'login', mode: 'login', options }) });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || '启动失败');
+  } catch (error) {
+    $('#error').textContent = error.message; $('#error').hidden = false;
+    pending = false; connected = false; events.close(); connect();
+  } finally {
+    delete options.username; delete options.password;
+    controls();
+  }
+});
 document.querySelectorAll('[data-mode]').forEach((button) => button.addEventListener('click', async () => {
   if (!connected || pending || run?.status === 'running') return;
   const card = button.closest('[data-task]');
@@ -148,22 +226,24 @@ $('#capture').addEventListener('click', async () => {
 });
 document.querySelectorAll('[data-clear]').forEach((button) => button.addEventListener('click', async () => {
   if (!connected || pending || run?.status === 'running') return;
-  const reuse = button.dataset.clear === 'packing' && button.closest('[data-task]').querySelector('[name=reuseShippingProfile]').checked;
-  const profile = reuse ? 'shipping' : button.dataset.clear;
-  const name = profile === 'shipping' ? '创建发货单（共享）' : '装箱发货（独立）';
-  if (!window.confirm(`确定清除${name}的浏览器登录信息吗？下次运行需要重新登录。请先关闭使用该配置的 Chrome 窗口。`)) return;
+  const profile = 'shipping';
+  if (!window.confirm('确定清除浏览器登录信息和本地缓存的账号密码吗？登录准备、创建发货单和装箱发货共用这份登录状态，下次运行需要重新登录。请先关闭脚本打开的 Chrome 窗口。')) return;
   pending = true; controls();
   try {
     const response = await fetch('/api/clear-profile', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ profile }) });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || '清除失败');
+    resetLoginFields();
+    cacheLogin();
+    profiles[profile] = { saved: false };
+    loginControls();
     $('#error').hidden = true;
     window.alert(result.message);
   } catch (error) {
     $('#error').textContent = error.message; $('#error').hidden = false;
   } finally { pending = false; controls(); }
 }));
-$('#stop').addEventListener('click', async () => {
+async function stopRun() {
   if (!connected || pending || run?.status !== 'running' || run.stopRequested) return;
   const id = run.id;
   pending = true; controls();
@@ -176,7 +256,9 @@ $('#stop').addEventListener('click', async () => {
     $('#error').textContent = error.message; $('#error').hidden = false;
     pending = false; connected = false; events.close(); connect(); controls();
   }
-});
+}
+$('#stop').addEventListener('click', stopRun);
+$('#login-stop').addEventListener('click', stopRun);
 $('#download').addEventListener('click', () => { window.location.href = '/api/log'; });
 document.addEventListener('click', (event) => {
   if (document.body.classList.contains('busy') && event.target.closest('a')) event.preventDefault();

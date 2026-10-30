@@ -232,3 +232,118 @@ test('主动快照抓取每次最新 DOM，保留多页与 frame', async (t) => 
   assert.match(read(first[0]).frames[0].html, /第一步/);
   assert.match(read(second[0]).frames[0].html, /动态节点/);
 });
+
+test('登录使用固定独立脚本，校验配置和成对凭据', () => {
+  const command = taskCommand({ task: 'login', mode: 'login', options: { username: 'test-user', password: 'test-password', acceptAgreement: true } });
+  assert.equal(path.basename(command.cwd), 'login-auto');
+  assert.deepEqual(command.args, ['index.js']);
+  assert.deepEqual(command.credentials, { username: 'test-user', password: 'test-password', acceptAgreement: true });
+  for (const options of [{ profile: 'packing' }, { profile: '../shipping' }, { username: 'user' }, { password: 'password' }, { username: [], password: 'x' }, { username: 'user', password: 'x'.repeat(1025) }, { acceptAgreement: 'yes' }]) {
+    assert.throws(() => taskCommand({ task: 'login', mode: 'login', options }));
+  }
+  assert.throws(() => taskCommand({ task: 'login', mode: 'auto' }));
+  assert.throws(() => taskCommand({ task: 'shipping', mode: 'login' }));
+});
+
+test('登录通过 IPC 传递凭据，持续运行直到停止，日志与状态不泄露凭据', async (t) => {
+  let call;
+  const f = await fixture(t, (executable, args, options) => {
+    call = { executable, args, options };
+    return spawn(process.execPath, ['-e', `
+      process.on('message', message => {
+        if (message.username !== 'private-user' || message.password !== 'private-password') process.exit(2);
+        console.log('LOGIN_READY');
+      });
+      process.on('SIGTERM', () => setTimeout(() => { console.log('LOGIN_CLOSED'); process.exit(0); }, 50));
+      process.send({ type: 'login-input-ready' });
+    `], { stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
+  });
+  assert.equal((await f.request({ task: 'login', mode: 'login' })).status, 400);
+  assert.equal((await f.request({ task: 'login', mode: 'login', options: { username: 'private-user', password: 'private-password' } })).status, 202);
+  const run = await waitUntil(async () => {
+    const state = await (await fetch(`${f.base}/api/state`)).json();
+    return state.run.logs.some((item) => item.text.includes('LOGIN_READY')) && state.run;
+  });
+  assert.equal(run.mode, 'login');
+  assert.equal(run.profile, 'shipping');
+  assert.equal(run.status, 'running');
+  assert.equal(call.options.shell, false);
+  assert.equal(call.options.stdio[3], 'ipc');
+  assert.doesNotMatch(JSON.stringify(call), /private-user|private-password/);
+  assert.doesNotMatch(JSON.stringify(run), /private-user|private-password/);
+  assert.equal((await f.request({ task: 'packing', mode: 'auto' })).status, 409);
+  const stop = await fetch(`${f.base}/api/stop`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: run.id }) });
+  assert.equal(stop.status, 202);
+  await waitUntil(async () => (await (await fetch(`${f.base}/api/state`)).json()).run.status === 'stopped');
+  const log = await (await fetch(`${f.base}/api/log`)).text();
+  assert.match(log, /LOGIN_CLOSED/);
+  assert.doesNotMatch(log, /private-user|private-password/);
+});
+
+test('Cookie 空库不算登录，确认登录后可直接打开页面，关闭后释放锁', async (t) => {
+  const f = await fixture(t, () => spawn(process.execPath, ['-e', `
+    process.on('message', message => {
+      if (message.username || message.password) process.exit(2);
+      console.log('OPENED');
+      setTimeout(() => process.exit(0), 200);
+    });
+    process.send({ type: 'login-input-ready' });
+  `], { stdio: ['ignore', 'pipe', 'pipe', 'ipc'] }));
+  const directory = path.join(f.runDir, 'shipping-auto', '.pw-profile', 'Default');
+  fs.mkdirSync(directory, { recursive: true });
+  // Chrome creates this database before authentication: do not hide credential inputs.
+  fs.writeFileSync(path.join(directory, 'Cookies'), 'mock cookies');
+  const state = await (await fetch(`${f.base}/api/state`)).json();
+  assert.deepEqual(state.profiles, { shipping: { saved: false } });
+  assert.equal((await f.request({ task: 'login', mode: 'login' })).status, 400);
+  fs.writeFileSync(path.join(directory, '..', '.login-state.json'), JSON.stringify({ savedAt: new Date().toISOString() }));
+  assert.deepEqual((await (await fetch(`${f.base}/api/state`)).json()).profiles, { shipping: { saved: true } });
+  assert.equal((await f.request({ task: 'login', mode: 'login', options: { profile: 'packing' } })).status, 400);
+  assert.equal((await f.request({ task: 'login', mode: 'login' })).status, 202);
+  await waitUntil(async () => (await (await fetch(`${f.base}/api/state`)).json()).run.status === 'succeeded');
+  assert.equal((await f.request({ task: 'login', mode: 'login' })).status, 202);
+});
+
+test('登录导航失败后保留会话及浏览器，清空内存凭据，手动关闭后结束', async (t) => {
+  const { EventEmitter } = require('node:events');
+  const { openSession } = require('../login-auto');
+  const page = Object.assign(new EventEmitter(), {
+    addInitScript: async () => {},
+    goto: async () => { throw new Error('模拟网络错误'); },
+    isClosed: () => false,
+    url: () => 'about:blank',
+  });
+  const context = Object.assign(new EventEmitter(), {
+    pages: () => [page],
+    close: async () => { context.emit('close'); },
+  });
+  t.after(() => context.close());
+  const credentials = { username: 'private-user', password: 'private-password' };
+  const logs = [];
+  const session = await openSession({
+    chromium: { launchPersistentContext: async () => context },
+    profileDir: '/not-used', task: 'shipping', credentials, log: (message) => logs.push(message),
+  });
+  let closed = false;
+  session.closed.then(() => { closed = true; });
+  await session.prepare();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(closed, false);
+  assert.match(logs.join('\n'), /手动继续/);
+  assert.deepEqual(credentials, { username: '', password: '' });
+  assert.doesNotMatch(logs.join('\n'), /private-user|private-password/);
+  await context.close();
+  await session.closed;
+  assert.equal(closed, true);
+});
+
+test('所有流程自动共用同一 Chrome 登录目录，无需配置选项', () => {
+  const profile = path.resolve(__dirname, '../shipping-auto/.pw-profile');
+  for (const mode of ['probe', 'dry', 'auto']) {
+    for (const options of [{}, { reuseShippingProfile: false }, { reuseShippingProfile: true }]) {
+      const command = taskCommand({ task: 'packing', mode, options });
+      assert.ok(command.args.includes(`--profile=${profile}`));
+    }
+  }
+  assert.deepEqual(taskCommand({ task: 'packing', mode: 'manual' }).args.slice(1), ['packing', '--reuse']);
+});

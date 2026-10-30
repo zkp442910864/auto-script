@@ -28,7 +28,7 @@ async function main() {
   const task = process.argv[2];
   if (!['shipping', 'packing'].includes(task)) throw new Error('未知流程');
   const root = path.resolve(__dirname, '..');
-  const profile = task === 'packing' && process.argv.includes('--reuse') ? 'shipping' : task;
+  const profile = 'shipping';
   const context = await chromium.launchPersistentContext(path.join(root, `${profile}-auto`, '.pw-profile'), {
     channel: 'chrome', headless: false, viewport: null,
     args: ['--start-maximized', '--disable-blink-features=AutomationControlled'],
