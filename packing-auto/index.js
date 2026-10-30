@@ -26,6 +26,7 @@
  *   --max-rounds=200   最多处理多少单
  *   --slowmo=120       每步延迟（毫秒），页面卡就调大
  *   --profile=<dir>    Chrome 配置目录，默认 ../shipping-auto/.pw-profile
+ *   --browser=auto --browser-port=9222  优先连接本机用户 Chrome，失败回退原方式
  *   --cdp=http://127.0.0.1:9222   复用已开调试端口的 Chrome
  *   --keep-open        跑完不关浏览器（默认关掉，好让脚本正常退出）
  *   --debug            详细日志
@@ -60,6 +61,7 @@
 const fs = require('fs');
 const path = require('path');
 const { chromium } = require('playwright-core');
+const { openTaskBrowser, runtimeOptions } = require('../shared/browser-session');
 
 /* ------------------------------ 命令行参数 ------------------------------ */
 const ARGV = process.argv.slice(2);
@@ -1050,26 +1052,7 @@ async function probe(page) {
 /* ------------------------------- 主流程 ------------------------------- */
 
 async function launch() {
-  if (CFG.cdp) {
-    log(`连接已开调试端口的 Chrome：${CFG.cdp}`);
-    const browser = await chromium.connectOverCDP(CFG.cdp);
-    const ctx = browser.contexts()[0] || (await browser.newContext());
-    const page = ctx.pages()[0] || (await ctx.newPage());
-    return { ctx, page };
-  }
-  log(`启动独立 Chrome（配置目录 ${CFG.profileDir}）`);
-  const ctx = await chromium.launchPersistentContext(CFG.profileDir, {
-    channel: 'chrome',
-    headless: false,
-    viewport: null,
-    args: ['--start-maximized', '--disable-blink-features=AutomationControlled'],
-    slowMo: CFG.slowMo,
-  });
-  const page = ctx.pages()[0] || (await ctx.newPage());
-  await page.addInitScript(() => {
-    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-  });
-  return { ctx, page };
+  return openTaskBrowser({ chromium, profileDir: CFG.profileDir, slowMo: CFG.slowMo, cdp: CFG.cdp, ...runtimeOptions(), log });
 }
 
 /** 处理一单：勾选 → 批量装箱发货 → 抽屉填表 → 提交 */
@@ -1132,13 +1115,8 @@ async function processOne(page, target) {
 }
 
 async function main() {
-  const { ctx, page } = await launch();
-  const onTerminate = async () => {
-    await ctx.close().catch(() => {});
-    process.exit(143);
-  };
-  process.once('SIGTERM', onTerminate);
-  process.once('SIGINT', onTerminate);
+  const session = await launch();
+  const { page } = session;
   page.on('dialog', (d) => d.accept().catch(() => {}));
   page.setDefaultTimeout(20000);
 
@@ -1149,12 +1127,10 @@ async function main() {
     }
     await runLoop(page);
   } finally {
-    process.removeListener('SIGTERM', onTerminate);
-    process.removeListener('SIGINT', onTerminate);
     // 默认收工关浏览器，脚本能正常退出；要看现场就加 --keep-open
     if (!CFG.keepOpen) {
-      await ctx.close().catch(() => {});
-      log('浏览器已关闭（想保留窗口请加 --keep-open）');
+      await session.close();
+      log(session.attached ? '已断开用户浏览器连接，窗口保留' : '浏览器已关闭（想保留窗口请加 --keep-open）');
     }
   }
 }

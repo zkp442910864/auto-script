@@ -347,3 +347,55 @@ test('所有流程自动共用同一 Chrome 登录目录，无需配置选项', 
   }
   assert.deepEqual(taskCommand({ task: 'packing', mode: 'manual' }).args.slice(1), ['packing', '--reuse']);
 });
+
+test('三个脚本及主动快照共用浏览器选项，拒绝非法模式与端口', () => {
+  for (const [task, modes] of [['login', ['login']], ['shipping', ['probe', 'dry', 'auto', 'manual']], ['packing', ['probe', 'dry', 'auto', 'manual']]]) {
+    for (const mode of modes) {
+      const command = taskCommand({ task, mode, options: { browserMode: 'auto', browserPort: 9333 } });
+      assert.deepEqual(command.browser, { browserMode: 'auto', browserPort: 9333 });
+      assert.doesNotMatch(command.args.join(' '), /9333|--browser=/);
+      for (const options of [{ browserMode: 'other' }, { browserPort: '9222' }, { browserPort: 0 }, { browserPort: 65536 }]) assert.throws(() => taskCommand({ task, mode, options }));
+    }
+  }
+});
+
+test('用户浏览器方式允许无凭据准备，状态同步实际方式及回退原因', async (t) => {
+  let call;
+  const f = await fixture(t, (exe, args, options) => {
+    call = options;
+    return spawn(process.execPath, ['-e', `
+      process.on('message', m => {
+        if (m.username || m.password) process.exit(2);
+        process.send({ type: 'browser-session', mode: 'profile', fallbackReason: '未检测到用户浏览器' });
+        console.log('FALLBACK_READY');
+      });
+      process.send({ type: 'login-input-ready' });
+    `], { stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
+  });
+  assert.equal((await f.request({ task: 'login', mode: 'login', options: { browserMode: 'auto', browserPort: 9333 } })).status, 202);
+  const state = await waitUntil(async () => {
+    const state = await (await fetch(`${f.base}/api/state`)).json();
+    return state.run?.browser && state;
+  });
+  assert.deepEqual(state.run.browser, { mode: 'profile', fallbackReason: '未检测到用户浏览器' });
+  assert.equal(call.env.AUTO_BROWSER_MODE, 'auto');
+  assert.equal(call.env.AUTO_BROWSER_PORT, '9333');
+  assert.equal(call.env.CDP, '');
+  assert.equal((await f.request({ task: 'shipping', mode: 'auto' })).status, 409);
+});
+
+test('浏览器检测 API 限制为本机数字端口，失败后仍可使用原流程', async (t) => {
+  const f = await fixture(t, () => spawn(process.execPath, ['-e', 'process.exit(0)']));
+  const server = http.createServer((req, res) => {
+    res.end(JSON.stringify({ Browser: 'Chrome/140', webSocketDebuggerUrl: `ws://127.0.0.1:${server.address().port}/devtools/browser/test` }));
+  });
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const port = server.address().port;
+  const response = await fetch(`${f.base}/api/browser-check?port=${port}`);
+  assert.deepEqual(await response.json(), { available: true, reason: '', port });
+  for (const port of ['0', '65536', 'http://example.test', '9222.5']) assert.equal((await fetch(`${f.base}/api/browser-check?port=${port}`)).status, 400);
+  await new Promise((resolve) => server.close(resolve));
+  assert.equal((await (await fetch(`${f.base}/api/browser-check?port=${port}`)).json()).available, false);
+  assert.equal((await f.request({ task: 'shipping', mode: 'probe' })).status, 202);
+});

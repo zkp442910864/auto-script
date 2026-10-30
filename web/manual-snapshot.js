@@ -3,6 +3,7 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
+const { openTaskBrowser, runtimeOptions } = require('../shared/browser-session');
 
 async function capturePages(context, directory) {
   await fs.mkdir(directory, { recursive: true });
@@ -29,23 +30,21 @@ async function main() {
   if (!['shipping', 'packing'].includes(task)) throw new Error('未知流程');
   const root = path.resolve(__dirname, '..');
   const profile = 'shipping';
-  const context = await chromium.launchPersistentContext(path.join(root, `${profile}-auto`, '.pw-profile'), {
-    channel: 'chrome', headless: false, viewport: null,
-    args: ['--start-maximized', '--disable-blink-features=AutomationControlled'],
-  });
-  const stop = async () => { await context.close().catch(() => {}); process.exit(0); };
-  process.once('SIGTERM', stop);
-  process.once('SIGINT', stop);
-  process.once('disconnect', stop);
-  context.on('close', () => process.exit(0));
-  const page = context.pages()[0] || await context.newPage();
+  const session = await openTaskBrowser({ chromium, profileDir: path.join(root, `${profile}-auto`, '.pw-profile'), ...runtimeOptions() });
+  const { context, page } = session;
+  const stop = async () => { await session.close(); process.exit(0); };
+  context.on('close', stop);
+  if (session.attached) {
+    session.browser.on('disconnected', stop);
+    page.on('close', stop);
+  }
   await page.goto(`https://seller.kuajingmaihuo.com/main/order-manager/${task === 'shipping' ? 'shipping-desk' : 'shipping-list'}`, { waitUntil: 'domcontentloaded', timeout: 60000 });
   let busy = false;
   process.on('message', async (message) => {
     if (message.type !== 'snapshot' || busy) return;
     busy = true;
     try {
-      const files = await capturePages(context, path.join(root, `${task}-auto`, 'shots'));
+      const files = await capturePages({ pages: session.pages }, path.join(root, `${task}-auto`, 'shots'));
       console.log(`主动快照已保存：${files.join('、')}（同名 JSON 包含各 frame 的 DOM）`);
       process.send?.({ type: 'snapshot-result', id: message.id, files });
     } catch (error) {

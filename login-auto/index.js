@@ -4,6 +4,7 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { once } = require('node:events');
+const { openBrowser, runtimeOptions } = require('../shared/browser-session');
 
 const ORIGIN = 'https://seller.kuajingmaihuo.com';
 
@@ -101,25 +102,29 @@ async function captureLoginPage(page, directory, name) {
   return filename;
 }
 
-async function openSession({ chromium, profileDir, credentials, probe = false, log = console.log, onSaved = () => {}, onRequired = () => {} }) {
-  const context = await chromium.launchPersistentContext(profileDir, {
-    channel: 'chrome', headless: false, viewport: null,
-    args: ['--start-maximized', '--disable-blink-features=AutomationControlled'],
-    slowMo: 120,
-  });
-  const closed = new Promise((resolve) => context.once('close', resolve));
-  // Keep the session alive even if initialization, navigation or login fails.
-  // It only ends when Chrome closes or the parent explicitly stops this process.
+async function openSession({ chromium, profileDir, credentials, probe = false, log = console.log, onSaved = () => {}, onRequired = () => {}, ...browserConfig }) {
+  const session = await openBrowser({ chromium, profileDir, log, ...browserConfig });
+  const { context, page } = session;
+  let resolveClosed;
+  const closed = new Promise((resolve) => { resolveClosed = resolve; });
   const keepAlive = setInterval(() => {}, 60000);
   let timer;
-  context.once('close', () => { clearInterval(keepAlive); clearInterval(timer); });
-  const watchPage = (page) => page.once('close', () => {
-    if (!context.pages().length) context.close().catch(() => {});
-  });
-  context.pages().forEach(watchPage);
-  context.on('page', watchPage);
+  const ended = () => {
+    clearInterval(keepAlive); clearInterval(timer);
+    resolveClosed();
+  };
+  context.once('close', ended);
+  if (session.attached) {
+    session.browser.once('disconnected', ended);
+    page.once('close', () => { ended(); session.close(); });
+  } else {
+    const watchPage = (candidate) => candidate.once('close', () => {
+      if (!context.pages().length) session.close();
+    });
+    context.pages().forEach(watchPage);
+    context.on('page', watchPage);
+  }
   const prepare = async () => {
-    const page = context.pages()[0] || await context.newPage();
     let stage = '打开页面';
     try {
       await page.addInitScript(() => {
@@ -150,7 +155,7 @@ async function openSession({ chromium, profileDir, credentials, probe = false, l
       credentials.username = '';
       credentials.password = '';
     }
-    log('前置准备会话已就绪：可手动完成登录、选择店铺等操作。完成后请关闭 Chrome 或点击「停止准备」，再运行后续脚本。');
+    log('前置准备会话已就绪：可手动完成登录、选择店铺等操作。完成后请关闭任务页面或点击「停止准备」，再运行后续脚本。');
     let checking = false;
     let saved = false;
     let required = false;
@@ -158,18 +163,18 @@ async function openSession({ chromium, profileDir, credentials, probe = false, l
       if (checking || saved) return;
       checking = true;
       try {
-        for (const candidate of context.pages()) {
+        for (const candidate of session.pages()) {
           if (!await isLoggedIn(candidate)) {
             if (!required && candidate.url().startsWith(`${ORIGIN}/login`)) {
               required = true;
-              await fs.rm(path.join(profileDir, '.login-state.json'), { force: true });
+              if (!session.attached) await fs.rm(path.join(profileDir, '.login-state.json'), { force: true });
               onRequired();
             }
             continue;
           }
-          await fs.writeFile(path.join(profileDir, '.login-state.json'), JSON.stringify({ savedAt: new Date().toISOString() }), { mode: 0o600 });
+          if (!session.attached) await fs.writeFile(path.join(profileDir, '.login-state.json'), JSON.stringify({ savedAt: new Date().toISOString() }), { mode: 0o600 });
           saved = true;
-          log('登录状态已保存在本机，后续可直接打开页面。');
+          log(session.attached ? '已确认用户浏览器登录状态；后续请继续连接该浏览器。' : '登录状态已保存在本机，后续可直接打开页面。');
           onSaved();
           clearInterval(timer);
           break;
@@ -182,11 +187,12 @@ async function openSession({ chromium, profileDir, credentials, probe = false, l
       await check();
     }
   };
-  return { context, closed, prepare };
+  return { context, page, closed, prepare, close: session.close };
 }
 
 async function main() {
-  if (process.argv.slice(2).some((arg) => arg !== '--probe')) throw new Error('未知参数');
+  if (process.argv.slice(2).some((arg) => arg !== '--probe' && !/^--(browser|browser-port)=/.test(arg))) throw new Error('未知参数');
+  const browserConfig = runtimeOptions();
   const { chromium } = require('../shipping-auto/node_modules/playwright-core');
   let session;
   let launching;
@@ -196,7 +202,7 @@ async function main() {
     stopping = true;
     // A stop during Chrome startup must also close the window once it launches.
     if (launching) session = await launching.catch(() => null);
-    if (session) await session.context.close().catch(() => {});
+    if (session) await session.close();
     process.exit(0);
   };
   process.once('SIGTERM', stop);
@@ -211,8 +217,7 @@ async function main() {
     credentials = { username: message.username, password: message.password, acceptAgreement: message.acceptAgreement === true };
   }
   const profileDir = path.resolve(__dirname, '../shipping-auto/.pw-profile');
-  console.log(`启动独立 Chrome（配置目录 ${profileDir}），与创建发货单和装箱发货共用登录状态。`);
-  launching = openSession({ chromium, profileDir, credentials, probe: process.argv.includes('--probe'), onSaved: () => process.send?.({ type: 'login-saved' }), onRequired: () => process.send?.({ type: 'login-required' }) });
+  launching = openSession({ chromium, profileDir, credentials, ...browserConfig, probe: process.argv.includes('--probe'), onSaved: () => process.send?.({ type: 'login-saved' }), onRequired: () => process.send?.({ type: 'login-required' }) });
   session = await launching;
   if (stopping) return;
   session.closed.then(() => process.exit(0));

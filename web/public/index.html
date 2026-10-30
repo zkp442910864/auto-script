@@ -14,10 +14,31 @@
     <section class="intro"><div><div class="eyebrow">OPERATIONS CONSOLE</div><h1>把重复的操作，交给脚本。</h1><p>选择流程，一键执行。每一步进展，都在这里。</p></div><div class="connection"><span id="connection-dot" class="dot"></span><span id="connection-text">正在连接服务</span></div></section>
     <div id="notice" class="notice" role="status" aria-live="polite">正在同步执行状态，连接后即可操作。</div>
     <div id="error" class="error" role="alert" hidden></div>
+    <section class="task-card browser-card" aria-labelledby="browser-title">
+      <div class="card-top"><span class="script-name">BROWSER</span><span id="browser-status" class="task-badge" role="status">执行时自动检测</span></div>
+      <h2 id="browser-title">浏览器使用方式</h2>
+      <div class="fields"><label>三个流程共用<select id="browser-mode"><option value="auto">优先使用用户浏览器，失败自动回退</option><option value="profile">原来的独立 Chrome</option></select></label><label>本机 Chrome 调试端口<input id="browser-port" type="number" min="1024" max="65535" value="9222" required></label></div>
+      <div class="browser-actions"><button id="browser-check" type="button">检测用户浏览器</button><span id="browser-check-result" class="muted" role="status">检测只检查调试服务，执行时会重新连接。</span></div>
+      <p id="browser-run" class="mode-note" role="status">尚未执行任务。</p>
+      <details class="browser-guide"><summary>使用用户浏览器的准备步骤</summary>
+        <ol>
+          <li>在终端运行下方对应系统的命令，打开启用本机调试端口的 Chrome。使用单独的用户目录，首次需要在这个窗口中登录；后续使用同一目录会保留登录状态。若已用此目录开过窗口，请先关闭那个窗口再运行命令。</li>
+          <li>在该 Chrome 窗口登录商家后台，确认当前店铺。选择上方「优先使用用户浏览器」，端口与命令保持一致，点击「检测用户浏览器」。</li>
+          <li>运行「登录与前置准备」检查页面、完成验证码或店铺选择。已有登录时可留空账号密码；完成后点「停止准备」，保留 Chrome 窗口。</li>
+          <li>再按需运行创建发货单或装箱发货，建议先快照、测试，再正式执行。脚本在新标签页操作，结束或停止只断开连接，保留用户窗口与页面；运行时请勿同时手动操作任务页面。</li>
+        </ol>
+        <p>macOS · 终端</p><pre><code id="browser-command-mac"></code></pre>
+        <p>Windows · PowerShell（如 Chrome 安装在其他位置，请替换程序路径）</p><pre><code id="browser-command-win"></code></pre>
+        <p>Linux · 终端</p><pre><code id="browser-command-linux"></code></pre>
+        <p>Chrome 136 起，调试端口要求非默认用户目录，不能直接接管普通打开的日常 Chrome 窗口。<a href="https://developer.chrome.com/blog/remote-debugging-port" target="_blank" rel="noopener">查看 Chrome 官方说明</a></p>
+        <p>未开启调试端口、端口不匹配或连接失败时，会自动按原方式启动独立 Chrome，复用项目的共享登录信息；两种方式的登录状态分别保存。回退后若未登录，请先完成登录准备。也可直接选择「原来的独立 Chrome」。</p>
+        <p>主动快照连接用户浏览器时，只抓取本次任务标签页及其弹出的页面。</p>
+      </details>
+    </section>
     <section class="task-card login-card" data-task="login" aria-labelledby="login-title">
       <div class="card-top"><span class="step">00</span><span class="script-name">login-auto</span><span id="login-status" class="task-badge">读取登录状态</span></div>
       <h2 id="login-title">登录与前置准备 <span>↗</span></h2>
-      <p class="task-description">输入手机号或邮箱和密码，脚本自动打开 Chrome 并登录，之后可手动完成店铺选择等前置操作。</p>
+      <p class="task-description">按所选方式打开 Chrome 页面，已有登录可直接继续；也可输入手机号或邮箱和密码自动登录，再手动完成店铺选择。</p>
       <form id="login-form">
         <div id="login-fields" class="fields">
           <label>账号<input id="login-username" name="username" type="text" maxlength="256" autocomplete="username" placeholder="手机号或子账号邮箱" required></label>
@@ -27,7 +48,7 @@
         <p id="login-saved" class="mode-note" hidden>已保存浏览器登录信息，直接打开页面继续操作；若已失效，请在 Chrome 中重新登录。</p>
         <div class="login-actions"><button id="login-start" class="primary" type="submit">登录并打开页面</button><button id="login-stop" class="stop-button" type="button" hidden>■ 停止准备</button><button class="clear-profile" data-clear="login" type="button">清除登录信息</button></div>
       </form>
-      <p class="mode-note"><span id="login-cache-note">账号密码自动缓存在当前浏览器本地，刷新后恢复；点击「清除登录信息」可删除。</span>此脚本会持续运行，直到手动关闭 Chrome 或点击「停止准备」。</p>
+      <p class="mode-note"><span id="login-cache-note">账号密码自动缓存在当前浏览器本地，刷新后恢复；点击「清除登录信息」可删除。</span>此脚本会持续运行，直到关闭任务页面或点击「停止准备」。清除登录信息仅清除项目共享配置和控制台缓存；用户浏览器的登录需在其窗口中退出。</p>
     </section>
     <section class="tasks" aria-label="自动化流程">
       <article class="task-card" data-task="shipping">
@@ -53,7 +74,7 @@
       <div class="terminal"><div class="terminal-bar"><div class="terminal-name"><span class="terminal-lights"><i></i><i></i><i></i></span><span id="run-title">等待执行</span></div><span id="run-status" class="run-status">IDLE</span></div><div id="logs" class="logs" role="log" aria-label="脚本实时输出" aria-live="off" tabindex="0"><div class="log-placeholder"><span>⌘</span><strong>准备就绪，等待你的指令</strong><p>点击上方任一操作，脚本输出将在这里实时显示。</p></div></div><div class="terminal-footer"><span id="run-time">尚未执行任务</span><span id="log-count">stdout / stderr · 实时同步</span></div></div>
       <p class="console-note"><span class="dot"></span>同一时间只运行一个任务。执行期间可手动停止；其他操作在任务结束后恢复。</p>
     </section>
-    <section class="snapshots" aria-labelledby="shots-title"><div class="section-heading"><div><span class="eyebrow">CAPTURED MOMENTS</span><h2 id="shots-title">页面快照</h2></div><span id="shot-count" class="muted">读取中</span></div><p class="mode-note">主动快照：在 Chrome 中手动操作到目标步骤，再点击「抓取当前页面」。可连续抓取，保存所有标签页截图及各 frame 的 DOM，结束时点击「结束快照」。</p><div id="shots" class="shot-grid"></div><p id="shots-empty" class="empty" hidden>还没有快照，执行「快照」后会自动显示截图。</p></section>
+    <section class="snapshots" aria-labelledby="shots-title"><div class="section-heading"><div><span class="eyebrow">CAPTURED MOMENTS</span><h2 id="shots-title">页面快照</h2></div><span id="shot-count" class="muted">读取中</span></div><p class="mode-note">主动快照：在 Chrome 中手动操作到目标步骤，再点击「抓取当前页面」。可连续抓取，保存本次会话的标签页截图及各 frame 的 DOM，结束时点击「结束快照」。</p><div id="shots" class="shot-grid"></div><p id="shots-empty" class="empty" hidden>还没有快照，执行「快照」后会自动显示截图。</p></section>
     <footer>本机 Chrome 运行 · 先完成登录与前置准备，再执行自动化流程<span>AUTO / LOCAL CONSOLE</span></footer>
   </main>
 </body>

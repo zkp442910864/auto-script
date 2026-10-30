@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
+const { browserOptions, discoverBrowser } = require('../shared/browser-session');
 
 const ROOT = path.resolve(__dirname, '..');
 const LOGIN_TASK = { id: 'login', name: '登录与前置准备', directory: 'login-auto' };
@@ -21,6 +22,7 @@ function taskCommand(input) {
   if (!task || !Object.hasOwn(MODES, input.mode) || (task.id === 'login') !== (input.mode === 'login')) throw new Error('未知脚本或执行模式');
   const options = input.options ?? {};
   if (!options || typeof options !== 'object' || Array.isArray(options)) throw new Error('执行参数格式错误');
+  const browser = browserOptions(options);
   if (task.id === 'login') {
     if (options.profile !== undefined && options.profile !== 'shipping') throw new Error('登录统一使用共享 Chrome 配置，无需选择');
     const profile = 'shipping';
@@ -29,7 +31,7 @@ function taskCommand(input) {
     if (typeof username !== 'string' || typeof password !== 'string' || username.length > 256 || password.length > 1024) throw new Error('账号或密码格式错误');
     if (Boolean(username.trim()) !== Boolean(password)) throw new Error('请同时填写账号和密码，或使用已保存的登录信息');
     if (options.acceptAgreement !== undefined && typeof options.acceptAgreement !== 'boolean') throw new Error('登录协议授权必须是布尔值');
-    return { task, args: ['index.js'], cwd: path.join(ROOT, task.directory), credentials: { username: username.trim(), password, acceptAgreement: options.acceptAgreement === true }, profile };
+    return { task, args: ['index.js'], cwd: path.join(ROOT, task.directory), credentials: { username: username.trim(), password, acceptAgreement: options.acceptAgreement === true }, profile, browser };
   }
   const args = ['index.js'];
   if (task.id === 'shipping') args.push('--close-browser');
@@ -51,10 +53,10 @@ function taskCommand(input) {
     args.splice(0, args.length, path.join(__dirname, 'manual-snapshot.js'), task.id);
     if (task.id === 'packing') args.push('--reuse');
   }
-  return { task, args, cwd: path.join(ROOT, task.directory) };
+  return { task, args, cwd: path.join(ROOT, task.directory), browser };
 }
 
-function createApp({ spawnProcess = spawn, runDir = path.join(ROOT, '.web-runs'), profileRoot = ROOT } = {}) {
+function createApp({ spawnProcess = spawn, runDir = path.join(ROOT, '.web-runs'), profileRoot = ROOT, checkBrowser = discoverBrowser } = {}) {
   const clients = new Set();
   const instance = randomUUID();
   let revision = 0;
@@ -131,6 +133,13 @@ function createApp({ spawnProcess = spawn, runDir = path.join(ROOT, '.web-runs')
       if (request.headers.origin && request.headers.origin !== `http://${host}`) return json(response, 403, { error: '不允许跨站请求' });
       const url = new URL(request.url, `http://${host}`);
       if (request.method === 'GET' && url.pathname === '/api/state') return json(response, 200, state());
+      if (request.method === 'GET' && url.pathname === '/api/browser-check') {
+        let port;
+        try { port = browserOptions({ browserPort: Number(url.searchParams.get('port') ?? 9222) }).browserPort; }
+        catch (error) { return json(response, 400, { error: error.message }); }
+        const result = await checkBrowser(port);
+        return json(response, 200, { available: result.available, reason: result.reason || '', port });
+      }
       if (request.method === 'GET' && url.pathname === '/api/events') {
         response.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
         response.write('retry: 1500\n\n');
@@ -233,12 +242,12 @@ function createApp({ spawnProcess = spawn, runDir = path.join(ROOT, '.web-runs')
         body = '';
         if (closing) return json(response, 503, { error: '服务正在关闭' });
         if (current?.status === 'running') return json(response, 409, { error: '已有任务执行中，请等待结束' });
-        if (command.task.id === 'login' && !command.credentials.username && !profiles()[command.profile].saved) return json(response, 400, { error: '首次登录请填写账号和密码' });
+        if (command.task.id === 'login' && command.browser.browserMode === 'profile' && !command.credentials.username && !profiles()[command.profile].saved) return json(response, 400, { error: '首次登录请填写账号和密码' });
         fs.mkdirSync(runDir, { recursive: true });
         const id = `${Date.now()}-${randomUUID()}`;
         const logPath = path.join(runDir, `${id}.log`);
         fs.writeFileSync(logPath, '');
-        current = { id, task: command.task.id, taskName: command.task.name, mode, ...(command.profile ? { profile: command.profile } : {}), status: 'running', startedAt: new Date().toISOString(), endedAt: null, exitCode: null, logs: [], logChars: 0, logPath, command: `node ${command.args.join(' ')}` };
+        current = { id, task: command.task.id, taskName: command.task.name, mode, browserPreference: command.browser, ...(command.profile ? { profile: command.profile } : {}), status: 'running', startedAt: new Date().toISOString(), endedAt: null, exitCode: null, logs: [], logChars: 0, logPath, command: `node ${command.args.join(' ')}` };
         revision++;
         broadcast('state', state());
         append('system', `开始执行：${command.task.name} · ${MODES[current.mode]}\n$ ${current.command}\n\n`);
@@ -259,11 +268,15 @@ function createApp({ spawnProcess = spawn, runDir = path.join(ROOT, '.web-runs')
           // Never run a shell or accept a user-supplied executable/argument string.
           child = spawnProcess(process.execPath, command.args, {
             cwd: command.cwd,
-            env: { ...process.env, DRY: current.mode === 'dry' ? '1' : '0', DEBUG: current.mode === 'dry' ? '1' : '0', CDP: '', PROFILE: '', FORCE_COLOR: '0', NO_COLOR: '1' },
-            stdio: ['manual', 'login'].includes(current.mode) ? ['ignore', 'pipe', 'pipe', 'ipc'] : ['ignore', 'pipe', 'pipe'], shell: false,
+            env: { ...process.env, DRY: current.mode === 'dry' ? '1' : '0', DEBUG: current.mode === 'dry' ? '1' : '0', CDP: '', PROFILE: '', AUTO_BROWSER_MODE: command.browser.browserMode, AUTO_BROWSER_PORT: String(command.browser.browserPort), FORCE_COLOR: '0', NO_COLOR: '1' },
+            stdio: ['ignore', 'pipe', 'pipe', 'ipc'], shell: false,
           });
           child.on('message', (message) => {
             if (!message || typeof message !== 'object') return;
+            if (message.type === 'browser-session' && ['attached', 'profile'].includes(message.mode)) {
+              current.browser = { mode: message.mode, fallbackReason: typeof message.fallbackReason === 'string' ? message.fallbackReason.slice(0, 200) : '' };
+              revision++; broadcast('state', state());
+            }
             if (current.mode === 'login' && message.type === 'login-input-ready' && command.credentials) {
               const credentials = command.credentials;
               delete command.credentials;

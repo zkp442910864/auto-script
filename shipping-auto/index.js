@@ -26,6 +26,7 @@
  *   --fill=99999     要输入的实际发货数，默认 99999
  *   --max-rounds=3   最多跑几轮，默认 200
  *   --slowmo=300     每步延迟（毫秒），默认 120，页面卡就调大
+ *   --browser=auto --browser-port=9222  优先连接本机用户 Chrome，失败回退原方式
  *   --cdp=http://127.0.0.1:9222   连接已开远程调试的 Chrome，复用现有登录态
  *   --debug          详细日志
  *
@@ -43,6 +44,7 @@
 const fs = require('fs');
 const path = require('path');
 const { chromium } = require('playwright-core');
+const { openBrowser, openTaskBrowser, runtimeOptions } = require('../shared/browser-session');
 
 /* ------------------------------ 命令行参数 ------------------------------ */
 // 支持 --dry / --debug / --fill=53 / --max-rounds=3 / --slowmo=300 / --cdp=... / --probe
@@ -1100,46 +1102,16 @@ async function probe(page) {
 /* ------------------------------- 主流程 ------------------------------- */
 
 async function main() {
-  let ctx;
-  let page;
-  if (CFG.cdp) {
-    log(`连接已开启调试端口的 Chrome：${CFG.cdp}`);
-    const browser = await chromium.connectOverCDP(CFG.cdp);
-    ctx = browser.contexts()[0] || (await browser.newContext());
-    page = ctx.pages()[0] || (await ctx.newPage());
-  } else {
-    log('启动独立 Chrome（配置目录 .pw-profile）');
-    ctx = await chromium.launchPersistentContext(CFG.profileDir, {
-      channel: 'chrome',
-      headless: false,
-      viewport: null,
-      args: ['--start-maximized', '--disable-blink-features=AutomationControlled'],
-      slowMo: CFG.slowMo,
-    });
-    page = ctx.pages()[0] || (await ctx.newPage());
-    await page.addInitScript(() => {
-      Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-    });
-  }
-
-  // Web 控制台需要进程真正结束；原有 CLI 仍默认保留窗口。
   const closeBrowser = hasFlag('close-browser');
-  const onTerminate = async () => {
-    await ctx.close().catch(() => {});
-    process.exit(143);
-  };
-  if (closeBrowser) {
-    process.once('SIGTERM', onTerminate);
-    process.once('SIGINT', onTerminate);
-  }
+  const session = await (closeBrowser ? openTaskBrowser : openBrowser)({ chromium, profileDir: CFG.profileDir, slowMo: CFG.slowMo, cdp: CFG.cdp, ...runtimeOptions(), log });
+  const { page } = session;
+
   try {
     await run(page);
   } finally {
-    process.removeListener('SIGTERM', onTerminate);
-    process.removeListener('SIGINT', onTerminate);
     if (closeBrowser) {
-      await ctx.close().catch(() => {});
-      log('浏览器已关闭');
+      await session.close();
+      log(session.attached ? '已断开用户浏览器连接，窗口保留' : '浏览器已关闭');
     }
   }
 }

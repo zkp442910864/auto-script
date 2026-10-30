@@ -15,8 +15,41 @@ npm run setup
 npm start
 ```
 
-打开 <http://127.0.0.1:3000>。首次使用先在「登录与前置准备」填写账号密码，点击「登录并打开页面」。
+打开 <http://127.0.0.1:3000>。页面默认「优先使用用户浏览器，失败自动回退」；浏览器使用方式、检测按钮和准备步骤显示在三个流程上方。也可选「原来的独立 Chrome」，继续原有登录与执行流程。
 关闭服务用 Ctrl+C。修改端口可设置环境变量 `PORT`，例如 macOS/Linux：`PORT=3100 npm start`；PowerShell：`$env:PORT=3100; npm start`。
+
+## 使用用户浏览器（可选）
+
+控制台优先连接 `127.0.0.1:9222` 的 Chrome 调试服务，可改为 1024–65535 的本机端口。只有执行时实际连接成功才会复用其登录状态；「检测用户浏览器」只检查调试服务，不判断店铺或登录是否有效。
+
+1. 用下面的命令打开启用调试的 Chrome，首次在该窗口登录商家后台并选择店铺。后续仍使用同一用户目录，登录状态会保留。若该目录的窗口已在运行，请先关闭该窗口再用命令重开。
+2. 在 Web 选择「优先使用用户浏览器」，填写与命令相同的端口，点击检测。
+3. 先打开「登录与前置准备」检查页面；已有登录可留空账号密码，也可输入凭据并授权协议后自动登录。完成验证码和店铺选择后，点击「停止准备」，保留 Chrome 窗口。
+4. 再使用创建发货单或装箱发货的快照、测试、正式执行。任务会新建标签页，结束或停止后保留窗口和页面。运行时请勿同时操作任务标签页。
+
+macOS 终端：
+
+```bash
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 --user-data-dir="$HOME/.auto-user-chrome"
+```
+
+Windows PowerShell（如安装在其他位置，请替换 Chrome 程序路径）：
+
+```powershell
+& "$env:ProgramFiles\Google\Chrome\Application\chrome.exe" --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 "--user-data-dir=$env:LOCALAPPDATA\AutoUserChrome"
+```
+
+Linux 终端：
+
+```bash
+google-chrome --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 --user-data-dir="$HOME/.auto-user-chrome"
+```
+
+[Chrome 136 起要求调试时使用非默认用户目录](https://developer.chrome.com/blog/remote-debugging-port)，因此不能直接接管普通打开的日常 Chrome 窗口。这里连接的是用户按上述方式启动并登录的 Chrome，不会读取或复制日常浏览器的配置。
+
+未开调试、端口不匹配、连接失败或无法新建任务标签页时，在业务开始前自动回退原来的独立 Chrome，共享 `shipping-auto/.pw-profile`。两种浏览器的登录状态分别保存；回退后如未登录，可先运行登录准备手动或自动登录。页面和日志显示本次实际方式及回退原因。任务开始后的页面错误或连接中断按原有错误处理，不自动重开浏览器或重跑业务。
+
+Web 会记住当前控制台地址下的浏览器方式和端口。旧 API 请求未传新参数时仍使用独立方式；新参数在 `options` 内为 `{browserMode: 'auto'|'profile', browserPort: 9222}`。`GET /api/browser-check?port=9222` 检测选定本机端口，不接受远程地址。三个脚本的 CLI 默认行为不变，均可加 `--browser=auto --browser-port=9222`；发货、装箱原有显式 `--cdp=...` 保留，其连接失败仍报错。
 
 ## 操作含义
 
@@ -26,7 +59,7 @@ npm start
 
 控制台会在输入、自动填充变更和提交时，将账号密码缓存到当前浏览器的 `localStorage`，刷新或重新打开同一地址后自动恢复。提交、运行结束和登录成功都不会清空这些输入。缓存只保存在当前浏览器、当前控制台地址；「清除登录信息」会同时删除缓存和清空输入框。登录协议授权不写入缓存。
 
-三个脚本均使用 Playwright 的 `launchPersistentContext`、`channel: chrome` 和有界面模式启动本机 Google Chrome，统一使用 `shipping-auto/.pw-profile`，无需选择登录配置。每次任务各自启动 Chrome 窗口，登录状态共用；先结束登录准备以释放目录，再执行创建发货单或装箱。`node login-auto/index.js` 可单独打开准备会话；`node login-auto/index.js --probe` 按同样方式启动 Chrome，抓取扫码、手机号、邮箱登录页的截图和字段 JSON 到 `login-auto/shots/`，不输入账号或提交登录，完成后继续留窗。
+原来的独立方式使用 Playwright 的 `launchPersistentContext`、`channel: chrome` 和有界面模式启动本机 Google Chrome，三个脚本统一使用 `shipping-auto/.pw-profile`，无需选择登录配置。每次任务各自启动 Chrome 窗口，登录状态共用；先结束登录准备以释放目录，再执行创建发货单或装箱。`node login-auto/index.js` 可单独打开准备会话；`node login-auto/index.js --probe` 按同样方式启动 Chrome，抓取扫码、手机号、邮箱登录页的截图和字段 JSON 到 `login-auto/shots/`，不输入账号或提交登录，完成后继续留窗。
 
 | 流程 | 快照 | 测试 | 正式执行 |
 | --- | --- | --- | --- |
@@ -41,13 +74,14 @@ npm start
 
 页面展示最近 8 张截图，运行时每 5 秒更新。截图保存在各脚本 `shots/`，可点击查看原图。最新任务的完整日志可下载，所有任务日志保存在根目录 `.web-runs/*.log`；页面仅保留有限的最近输出，服务重启后不恢复运行状态和历史展示。不要在运行中重启服务；关闭服务会向脚本发送终止信号，并尽力关闭其浏览器。
 
-控制台仅绑定本机 `127.0.0.1`，用于运行当前电脑上的脚本。Web 调用的快照、测试和正式执行会在完成后关闭浏览器，释放登录目录；登录准备和主动快照会持续保留窗口，直到用户关闭或停止。原有 `shipping-auto` 命令行行为保持不变，新增 `--close-browser` 参数可启用相同清理逻辑。
+控制台仅绑定本机 `127.0.0.1`，用于运行当前电脑上的脚本。独立方式下，Web 调用的快照、测试和正式执行会在完成后关闭浏览器，释放登录目录；登录准备和主动快照会持续保留窗口，直到用户关闭或停止。连接用户浏览器时，完成或停止仅断开连接，保留浏览器及其标签页。原有 `shipping-auto` 命令行行为保持不变，新增 `--close-browser` 参数可启用相同清理逻辑。
 
 ## 开发与验证
 
 ```bash
 npm run dev
 npm test
+npm run test:browser  # 独立临时 Chrome：CDP 连接、保留窗口、Web 桌面/移动端联调
 npm run test:login  # 用本机 Chrome 对本地模拟登录页验证手机号/邮箱自动切换与提交
 ```
 
@@ -64,10 +98,10 @@ login-auto/          独立登录与前置准备脚本，复用现有 Playwright
 AGENT.md             项目与代理开发说明
 ```
 
-页面所有「清除登录信息」按钮操作同一份本地 Chrome 登录配置，清除后三个流程都需重新登录。清除前请关闭使用该配置的 Chrome 窗口，任务运行中不可清除。
+页面所有「清除登录信息」按钮操作同一份项目共享 Chrome 登录配置及控制台本地账号密码缓存，清除后原方式的三个流程都需重新登录；不会删除用户浏览器的登录信息，如需清除请在其窗口中退出登录。清除前请关闭使用该配置的 Chrome 窗口，任务运行中不可清除。
 
 ## 主动快照（多步动态页面）
 
 点击对应流程的「主动快照」，等待日志提示就绪，在 Chrome 中登录并手动操作到目标步骤。每次节点渲染完成后点击日志区的「抓取当前页面」，可以连续抓取弹窗、下拉面板和下一步页面。该模式只打开流程入口，不自动执行发货操作；手动操作仍按商家后台自身行为生效。
 
-每次保存全部打开标签页的 PNG 和同名 JSON，JSON 包含页面 URL、抓取时间及各 frame 的当前 HTML。页面快照区可预览截图、下载 DOM，文件也保存在对应脚本的 `shots/` 下。跨多个页面的抓取按顺序执行，建议抓取期间暂停手动操作，完成后再进入下一步。点击「结束快照」关闭浏览器并释放任务锁；刷新控制台后仍可继续抓取。
+独立方式每次保存全部打开标签页的 PNG 和同名 JSON；用户浏览器方式仅保存本次任务标签页及其弹出页面的 PNG 和同名 JSON。JSON 包含页面 URL、抓取时间及各 frame 的当前 HTML。页面快照区可预览截图、下载 DOM，文件也保存在对应脚本的 `shots/` 下。跨多个页面的抓取按顺序执行，建议抓取期间暂停手动操作，完成后再进入下一步。点击「结束快照」关闭独立浏览器或断开用户浏览器连接，并释放任务锁；刷新控制台后仍可继续抓取。

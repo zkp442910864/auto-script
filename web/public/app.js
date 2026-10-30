@@ -14,6 +14,45 @@ let instance = null;
 let revision = -1;
 let profiles = {};
 const LOGIN_CACHE_KEY = 'auto-console.login.v1';
+const BROWSER_CACHE_KEY = 'auto-console.browser.v1';
+let checkingBrowser = false;
+try {
+  const cached = JSON.parse(localStorage.getItem(BROWSER_CACHE_KEY));
+  if (cached && ['auto', 'profile'].includes(cached.browserMode)) $('#browser-mode').value = cached.browserMode;
+  if (Number.isSafeInteger(cached?.browserPort) && cached.browserPort >= 1024 && cached.browserPort <= 65535) $('#browser-port').value = cached.browserPort;
+} catch {}
+function browserOptions() {
+  const browserMode = $('#browser-mode').value;
+  return { browserMode, browserPort: browserMode === 'profile' ? 9222 : Number($('#browser-port').value) };
+}
+function browserControlsChanged() {
+  const options = browserOptions();
+  try { localStorage.setItem(BROWSER_CACHE_KEY, JSON.stringify(options)); } catch {}
+  const port = Number.isSafeInteger(options.browserPort) && options.browserPort >= 1024 && options.browserPort <= 65535 ? options.browserPort : 9222;
+  const flags = `--remote-debugging-address=127.0.0.1 --remote-debugging-port=${port}`;
+  $('#browser-command-mac').textContent = `"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" ${flags} --user-data-dir="$HOME/.auto-user-chrome"`;
+  $('#browser-command-win').textContent = `& "$env:ProgramFiles\\Google\\Chrome\\Application\\chrome.exe" ${flags} "--user-data-dir=$env:LOCALAPPDATA\\AutoUserChrome"`;
+  $('#browser-command-linux').textContent = `google-chrome ${flags} --user-data-dir="$HOME/.auto-user-chrome"`;
+  $('#browser-check-result').textContent = options.browserMode === 'profile' ? '使用原来的共享 Chrome 配置，无需开启调试端口。' : '执行前可检测调试服务；执行时会重新连接。';
+  $('#browser-status').textContent = options.browserMode === 'profile' ? '独立 Chrome' : '优先用户浏览器';
+  loginControls();
+  controls();
+}
+$('#browser-mode').addEventListener('change', browserControlsChanged);
+$('#browser-port').addEventListener('input', browserControlsChanged);
+$('#browser-check').addEventListener('click', async () => {
+  if ($('#browser-check').disabled || !$('#browser-port').reportValidity()) return;
+  const selected = browserOptions();
+  checkingBrowser = true; controls();
+  $('#browser-check-result').textContent = '正在检测…';
+  try {
+    const response = await fetch(`/api/browser-check?port=${selected.browserPort}`);
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || '检测失败');
+    $('#browser-check-result').textContent = result.available ? `端口 ${result.port} 可用。执行时尝试连接；请确认该窗口已登录正确店铺。` : `${result.reason}。执行时自动回退原来的独立 Chrome。`;
+  } catch (error) { $('#browser-check-result').textContent = error.message; }
+  finally { checkingBrowser = false; controls(); }
+});
 
 function cacheLogin() {
   try {
@@ -49,22 +88,26 @@ window.addEventListener('storage', (event) => {
 });
 
 function loginControls() {
-  const saved = Boolean(profiles.shipping?.saved);
+  const auto = $('#browser-mode').value === 'auto';
+  const saved = !auto && Boolean(profiles.shipping?.saved);
   $('#login-fields').hidden = saved;
   $('#login-saved').hidden = !saved;
-  $('#login-username').required = !saved;
-  $('#login-password').required = !saved;
+  $('#login-username').required = !saved && !auto;
+  $('#login-password').required = !saved && !auto;
   $('#login-consent-label').hidden = saved;
-  $('#login-consent').required = !saved;
-  $('#login-start').textContent = saved ? '打开页面' : '登录并打开页面';
-  $('#login-status').textContent = saved ? '已保存登录信息' : '首次登录';
+  $('#login-consent').required = !saved && !auto;
+  $('#login-start').textContent = saved || auto ? '打开页面 / 登录准备' : '登录并打开页面';
+  $('#login-status').textContent = auto ? '已有登录可留空账号密码' : saved ? '已保存登录信息' : '首次登录';
 }
 
 function controls() {
-  const busy = !connected || pending || run?.status === 'running';
+  const busy = !connected || pending || checkingBrowser || run?.status === 'running';
   document.body.classList.toggle('busy', busy);
   document.querySelectorAll('button, input, select').forEach((item) => { item.disabled = busy; });
   $('#download').disabled = busy || !run;
+  $('#browser-port').disabled = busy || $('#browser-mode').value === 'profile';
+  $('#browser-check').disabled = busy || $('#browser-mode').value === 'profile';
+  $('#browser-run').textContent = run?.browser ? `本次任务：${run.browser.mode === 'attached' ? '使用用户浏览器，结束后保留窗口' : '使用原来的独立 Chrome'}${run.browser.fallbackReason ? `；回退原因：${run.browser.fallbackReason}` : ''}` : run?.status === 'running' ? '正在准备浏览器连接…' : '尚未执行任务。';
   $('#stop').disabled = !connected || pending || run?.status !== 'running' || Boolean(run?.stopRequested);
   $('#login-stop').hidden = run?.task !== 'login' || run?.status !== 'running';
   $('#login-stop').disabled = $('#stop').disabled;
@@ -164,13 +207,17 @@ $('#login-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   if (!connected || pending || run?.status === 'running') return;
   cacheLogin();
-  const options = {};
-  if (!profiles.shipping?.saved) {
+  if (!$('#browser-port').reportValidity()) return;
+  const options = browserOptions();
+  if (options.browserMode === 'auto' || !profiles.shipping?.saved) {
     options.username = $('#login-username').value.trim();
     options.password = $('#login-password').value;
     options.acceptAgreement = $('#login-consent').checked;
-    if (!options.username || !options.password) {
-      $('#error').textContent = '请填写账号和密码'; $('#error').hidden = false; return;
+    if (Boolean(options.username) !== Boolean(options.password) || (options.browserMode === 'profile' && !options.username)) {
+      $('#error').textContent = '请同时填写账号和密码，或留空后在 Chrome 中手动登录'; $('#error').hidden = false; return;
+    }
+    if (options.username && !options.acceptAgreement) {
+      $('#error').textContent = '自动登录前请阅读并勾选登录协议授权；也可留空账号密码后手动登录。'; $('#error').hidden = false; return;
     }
   }
   pending = true; $('#error').hidden = true; controls();
@@ -189,7 +236,8 @@ $('#login-form').addEventListener('submit', async (event) => {
 document.querySelectorAll('[data-mode]').forEach((button) => button.addEventListener('click', async () => {
   if (!connected || pending || run?.status === 'running') return;
   const card = button.closest('[data-task]');
-  const options = {};
+  if (!$('#browser-port').reportValidity()) return;
+  const options = browserOptions();
   for (const input of card.querySelectorAll('input')) {
     if (!input.reportValidity()) return;
     options[input.name] = input.type === 'checkbox' ? input.checked : Number(input.value);
@@ -227,7 +275,7 @@ $('#capture').addEventListener('click', async () => {
 document.querySelectorAll('[data-clear]').forEach((button) => button.addEventListener('click', async () => {
   if (!connected || pending || run?.status === 'running') return;
   const profile = 'shipping';
-  if (!window.confirm('确定清除浏览器登录信息和本地缓存的账号密码吗？登录准备、创建发货单和装箱发货共用这份登录状态，下次运行需要重新登录。请先关闭脚本打开的 Chrome 窗口。')) return;
+  if (!window.confirm('确定清除项目共享 Chrome 登录配置和本地缓存的账号密码吗？原方式的三个流程都需重新登录。请先关闭脚本打开的独立 Chrome 窗口。用户浏览器的登录信息保留，如需清除请在该窗口中退出登录。')) return;
   pending = true; controls();
   try {
     const response = await fetch('/api/clear-profile', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ profile }) });
@@ -273,7 +321,7 @@ function connect() {
   });
   events.onerror = () => { connected = false; controls(); };
 }
-controls();
+browserControlsChanged();
 connect();
 refreshShots();
 setInterval(updateTime, 1000);
