@@ -190,3 +190,45 @@ test('清除指定登录配置，运行期间禁止清除', async (t) => {
   assert.equal((await clear('packing')).status, 409);
   assert.equal(fs.existsSync(path.join(f.runDir, 'packing-auto', '.pw-profile')), true);
 });
+
+test('主动快照会话支持连续抓取，拦截旧会话及并发请求', async (t) => {
+  const f = await fixture(t, () => spawn(process.execPath, ['-e', `
+    process.on('message', m => setTimeout(() => process.send({ type: 'snapshot-result', id: m.id, files: ['manual-test.png'] }), 100));
+    process.send({ type: 'snapshot-ready' });
+  `], { stdio: ['ignore', 'pipe', 'pipe', 'ipc'] }));
+  const command = taskCommand({ task: 'packing', mode: 'manual', options: { reuseShippingProfile: true } });
+  assert.ok(command.args[0].endsWith('manual-snapshot.js'));
+  assert.deepEqual(command.args.slice(1), ['packing', '--reuse']);
+  await f.request({ task: 'packing', mode: 'manual' });
+  const run = await waitUntil(async () => {
+    const state = await (await fetch(`${f.base}/api/state`)).json();
+    return state.run.snapshotReady && state.run;
+  });
+  const capture = (id) => fetch(`${f.base}/api/snapshot`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) });
+  assert.equal((await capture('old')).status, 409);
+  const responses = await Promise.all([capture(run.id), capture(run.id)]);
+  assert.deepEqual(responses.map(r => r.status).sort(), [200, 409]);
+  assert.deepEqual((await (await capture(run.id)).json()).files, ['manual-test.png']);
+  assert.equal((await f.request({ task: 'shipping', mode: 'auto' })).status, 409);
+});
+
+test('主动快照抓取每次最新 DOM，保留多页与 frame', async (t) => {
+  const { capturePages } = require('./manual-snapshot');
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'manual-capture-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  let html = '<button>第一步</button>';
+  const page = {
+    isClosed: () => false, url: () => 'https://example.test',
+    frames: () => [{ url: () => 'https://example.test', content: async () => html }],
+    screenshot: async ({ path: file }) => fs.writeFileSync(file, 'mock image'),
+  };
+  const context = { pages: () => [page, page] };
+  const first = await capturePages(context, directory);
+  html = '<div role="dialog">动态节点</div>';
+  const second = await capturePages(context, directory);
+  assert.equal(first.length, 2);
+  assert.notEqual(first[0], second[0]);
+  const read = name => JSON.parse(fs.readFileSync(path.join(directory, name.replace('.png', '.json'))));
+  assert.match(read(first[0]).frames[0].html, /第一步/);
+  assert.match(read(second[0]).frames[0].html, /动态节点/);
+});

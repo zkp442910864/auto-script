@@ -11,7 +11,7 @@ const TASKS = [
   { id: 'shipping', name: '创建发货单', directory: 'shipping-auto', description: '修改实际发货数，按仓库分组创建发货单。' },
   { id: 'packing', name: '装箱发货', directory: 'packing-auto', description: '填写箱数、预约取货时间，逐单确认发货。' },
 ];
-const MODES = { probe: '快照', dry: '测试演练', auto: '正式执行' };
+const MODES = { probe: '快照', dry: '测试演练', auto: '正式执行', manual: '主动快照' };
 const MAX_LOG_CHARS = 600000;
 
 function taskCommand(input) {
@@ -36,6 +36,10 @@ function taskCommand(input) {
     number('boxes', 1, 1, 100000, 'boxes');
     if (options.reuseShippingProfile === true) args.push(`--profile=${path.join(ROOT, 'shipping-auto', '.pw-profile')}`);
   }
+  if (input.mode === 'manual') {
+    args.splice(0, args.length, path.join(__dirname, 'manual-snapshot.js'), task.id);
+    if (task.id === 'packing' && options.reuseShippingProfile === true) args.push('--reuse');
+  }
   return { task, args, cwd: path.join(ROOT, task.directory) };
 }
 
@@ -46,6 +50,7 @@ function createApp({ spawnProcess = spawn, runDir = path.join(ROOT, '.web-runs')
   let current = null;
   let child = null;
   let closing = false;
+  let snapshotPending = null;
   let shuttingDown = null;
   const state = () => ({ instance, revision, tasks: TASKS, modes: MODES, run: current });
   function send(response, event, data) {
@@ -81,7 +86,7 @@ function createApp({ spawnProcess = spawn, runDir = path.join(ROOT, '.web-runs')
       return Promise.all(files.filter((file) => file.isFile() && /\.png$/i.test(file.name)).map(async (file) => {
         try {
           const info = await fs.promises.stat(path.join(directory, file.name));
-          return { task: task.id, name: file.name, modified: info.mtime.toISOString(), url: `/api/shots/${task.id}/${encodeURIComponent(file.name)}` };
+          return { task: task.id, name: file.name, modified: info.mtime.toISOString(), domUrl: file.name.startsWith('manual-') ? `/api/dom/${task.id}/${encodeURIComponent(file.name.replace(/\.png$/i, '.json'))}` : null, url: `/api/shots/${task.id}/${encodeURIComponent(file.name)}` };
         } catch { return null; }
       }));
     }));
@@ -117,16 +122,18 @@ function createApp({ spawnProcess = spawn, runDir = path.join(ROOT, '.web-runs')
         return;
       }
       if (request.method === 'GET' && url.pathname === '/api/shots') return json(response, 200, { shots: await screenshots() });
-      if (request.method === 'GET' && url.pathname.startsWith('/api/shots/')) {
+      if (request.method === 'GET' && (url.pathname.startsWith('/api/shots/') || url.pathname.startsWith('/api/dom/'))) {
         const parts = url.pathname.split('/');
         const task = TASKS.find((item) => item.id === parts[3]);
         const filename = decodeURIComponent(parts[4] || '');
-        if (!task || parts.length !== 5 || path.basename(filename) !== filename || filename.includes('\\') || !/^[\w.-]+\.png$/i.test(filename)) return json(response, 404, { error: '快照不存在' });
+        const isDom = parts[2] === 'dom';
+        if (!task || parts.length !== 5 || path.basename(filename) !== filename || filename.includes('\\') || !(isDom ? /^manual-[\w.-]+\.json$/i : /^[\w.-]+\.png$/i).test(filename)) return json(response, 404, { error: '快照不存在' });
         const directory = path.join(ROOT, task.directory, 'shots');
         const file = path.join(directory, filename);
         const real = await fs.promises.realpath(file).catch(() => '');
         if (!real || path.dirname(real) !== await fs.promises.realpath(directory)) return json(response, 404, { error: '快照不存在' });
-        return serveFile(response, file, 'image/png');
+        if (isDom) response.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        return serveFile(response, file, isDom ? 'application/json; charset=utf-8' : 'image/png');
       }
       if (request.method === 'GET' && url.pathname === '/api/log') {
         if (!current) return json(response, 404, { error: '还没有执行记录' });
@@ -148,6 +155,26 @@ function createApp({ spawnProcess = spawn, runDir = path.join(ROOT, '.web-runs')
         const directory = path.join(profileRoot, task.directory, '.pw-profile');
         fs.rmSync(directory, { recursive: true, force: true });
         return json(response, 200, { message: `${task.name}的登录信息已清除，下次执行时需要重新登录` });
+      }
+      if (request.method === 'POST' && url.pathname === '/api/snapshot') {
+        if (!request.headers['content-type']?.startsWith('application/json')) return json(response, 415, { error: '请使用 JSON 请求' });
+        let body = '';
+        for await (const chunk of request) {
+          body += chunk;
+          if (Buffer.byteLength(body) > 8192) return json(response, 413, { error: '请求过大' });
+        }
+        let id;
+        try { id = JSON.parse(body).id; } catch { return json(response, 400, { error: '请求格式错误' }); }
+        if (closing || !child?.connected || current?.id !== id || current.status !== 'running' || current.mode !== 'manual' || !current.snapshotReady || current.stopRequested) return json(response, 409, { error: '主动快照会话尚未就绪或已结束' });
+        if (snapshotPending) return json(response, 409, { error: '正在抓取，请稍候' });
+        const captureId = randomUUID();
+        const result = await new Promise((resolve) => {
+          const timer = setTimeout(() => done({ error: '抓取超时，请重试' }), 60000);
+          const done = (value) => { clearTimeout(timer); snapshotPending = null; resolve(value); };
+          snapshotPending = { id: captureId, done };
+          child.send({ type: 'snapshot', id: captureId }, (error) => { if (error && snapshotPending?.id === captureId) done({ error: error.message }); });
+        });
+        return json(response, result.error ? 500 : 200, result);
       }
       if (request.method === 'POST' && url.pathname === '/api/stop') {
         if (!request.headers['content-type']?.startsWith('application/json')) return json(response, 415, { error: '请使用 JSON 请求' });
@@ -191,6 +218,7 @@ function createApp({ spawnProcess = spawn, runDir = path.join(ROOT, '.web-runs')
         const finish = (code, signal) => {
           if (finished) return;
           finished = true;
+          snapshotPending?.done({ error: '快照会话已结束' });
           append('system', `\n进程已结束，退出码：${code ?? '无'}${signal ? `，信号：${signal}` : ''}\n`);
           current.status = current.stopRequested ? 'stopped' : code === 0 ? 'succeeded' : 'failed';
           current.exitCode = code;
@@ -204,7 +232,11 @@ function createApp({ spawnProcess = spawn, runDir = path.join(ROOT, '.web-runs')
           child = spawnProcess(process.execPath, command.args, {
             cwd: command.cwd,
             env: { ...process.env, DRY: current.mode === 'dry' ? '1' : '0', DEBUG: current.mode === 'dry' ? '1' : '0', CDP: '', PROFILE: '', FORCE_COLOR: '0', NO_COLOR: '1' },
-            stdio: ['ignore', 'pipe', 'pipe'], shell: false,
+            stdio: current.mode === 'manual' ? ['ignore', 'pipe', 'pipe', 'ipc'] : ['ignore', 'pipe', 'pipe'], shell: false,
+          });
+          child.on('message', (message) => {
+            if (message.type === 'snapshot-ready') { current.snapshotReady = true; revision++; broadcast('state', state()); }
+            if (message.type === 'snapshot-result' && snapshotPending?.id === message.id) snapshotPending.done(message);
           });
           for (const stream of ['stdout', 'stderr']) {
             child[stream].setEncoding('utf8');

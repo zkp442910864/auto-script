@@ -30,3 +30,5 @@
 - `POST /api/stop` 接收当前任务 `id`，发送 SIGTERM；停止期间保持运行锁，等待子进程 close 后标记 stopped。停止不会撤销已提交的业务操作。
 
 - `POST /api/clear-profile` 只接受 shipping 或 packing 对应的固定配置目录，任务运行时禁止清除。前端在清除前说明涉及的配置和需要重新登录。
+
+- 主动快照模式 `manual` 使用固定脚本 `web/manual-snapshot.js`，通过 Node IPC 接收 `/api/snapshot` 的抓取请求。会话保持全局锁，运行期间额外允许「抓取当前页面」；不会自动执行 probe 或业务提交。快照 JSON 仅通过受限 `/api/dom/:task/:file` 附件下载，不作为 HTML 执行。

@@ -5,6 +5,7 @@ const logs = $('#logs');
 const emptyLog = logs.firstElementChild.cloneNode(true);
 let connected = false;
 let pending = false;
+let capturing = false;
 let run = null;
 let runId = null;
 let shots = [];
@@ -18,7 +19,9 @@ function controls() {
   document.querySelectorAll('button, input').forEach((item) => { item.disabled = busy; });
   $('#download').disabled = busy || !run;
   $('#stop').disabled = !connected || pending || run?.status !== 'running' || Boolean(run?.stopRequested);
-  $('#stop').textContent = run?.stopRequested ? '正在停止…' : '■ 停止执行';
+  $('#capture').disabled = !connected || capturing || pending || run?.status !== 'running' || run?.mode !== 'manual' || !run?.snapshotReady || Boolean(run?.stopRequested);
+  $('#capture').textContent = capturing ? '正在抓取…' : '▣ 抓取当前页面';
+  $('#stop').textContent = run?.stopRequested ? '正在停止…' : run?.mode === 'manual' ? '结束快照' : '■ 停止执行';
   document.querySelectorAll('.shot, .brand').forEach((link) => {
     link.setAttribute('aria-disabled', String(busy));
     link.tabIndex = busy ? -1 : 0;
@@ -30,7 +33,7 @@ function controls() {
   $('#connection-dot').classList.toggle('offline', !connected);
   $('#connection-text').textContent = connected ? '服务已连接' : '正在连接服务';
 }
-function modeLabel(mode) { return { probe: '快照', dry: '测试演练', auto: '正式执行' }[mode] || mode; }
+function modeLabel(mode) { return { probe: '快照', dry: '测试演练', auto: '正式执行', manual: '主动快照' }[mode] || mode; }
 function clock(value) { return new Date(value).toLocaleString('zh-CN', { hour12: false }); }
 function updateTime() {
   if (!run) return;
@@ -93,6 +96,11 @@ async function refreshShots() {
       const title = document.createElement('span'); title.className = 'shot-title'; title.textContent = shot.name; title.title = shot.name;
       const time = document.createElement('span'); time.className = 'shot-time'; time.textContent = `${shot.task === 'shipping' ? '创建发货单' : '装箱发货'} · ${clock(shot.modified)}`;
       info.append(title, time); link.append(img, info); $('#shots').append(link);
+      if (shot.domUrl) {
+        const dom = document.createElement('a');
+        dom.className = 'shot'; dom.href = shot.domUrl; dom.textContent = `↓ 下载 DOM · ${shot.name}`;
+        $('#shots').append(dom);
+      }
     }
     $('#shot-count').textContent = `最近 ${Math.min(shots.length, 8)} 张`;
     $('#shots-empty').hidden = shots.length > 0;
@@ -126,6 +134,18 @@ document.querySelectorAll('[data-mode]').forEach((button) => button.addEventList
   }
   controls();
 }));
+$('#capture').addEventListener('click', async () => {
+  if ($('#capture').disabled) return;
+  capturing = true; controls();
+  try {
+    const response = await fetch('/api/snapshot', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: run.id }) });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || '抓取失败');
+    $('#error').hidden = true;
+    await refreshShots();
+  } catch (error) { $('#error').textContent = error.message; $('#error').hidden = false; }
+  finally { capturing = false; controls(); }
+});
 document.querySelectorAll('[data-clear]').forEach((button) => button.addEventListener('click', async () => {
   if (!connected || pending || run?.status === 'running') return;
   const reuse = button.dataset.clear === 'packing' && button.closest('[data-task]').querySelector('[name=reuseShippingProfile]').checked;
