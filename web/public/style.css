@@ -3,5 +3,3 @@
 .stop-button{border-color:#d6a99c;color:#a34931;background:#fff7f3;padding:7px 12px;font-weight:600}.stop-button:hover:enabled{background:#fce7df}
 
 .clear-profile{align-self:flex-start;margin-top:10px;padding:4px 0;border:0;background:transparent;color:#9b6b5c;font-size:10px}.clear-profile:hover:enabled{background:transparent;text-decoration:underline}
-
-.task-card[data-task=temu]{grid-column:1/-1}.task-card[data-task=temu] .actions{grid-template-columns:minmax(140px,220px);padding-top:20px}.result-downloads{display:flex;gap:18px;flex-wrap:wrap;margin:12px 0;font-size:12px}.result-downloads a{color:var(--green)}body.busy .result-downloads a{pointer-events:none;opacity:.5}.log-tools{flex-wrap:wrap}#collection-progress{font-size:12px;margin-bottom:10px}

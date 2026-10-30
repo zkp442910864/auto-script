@@ -10,9 +10,8 @@ const ROOT = path.resolve(__dirname, '..');
 const TASKS = [
   { id: 'shipping', name: '创建发货单', directory: 'shipping-auto', description: '修改实际发货数，按仓库分组创建发货单。' },
   { id: 'packing', name: '装箱发货', directory: 'packing-auto', description: '填写箱数、预约取货时间，逐单确认发货。' },
-  { id: 'temu', name: 'Temu 商品采集', directory: 'temu-auto', description: '采集贴纸搜索结果前 200 条，自动加载更多，验证时等待用户。' },
 ];
-const MODES = { probe: '快照', dry: '测试演练', auto: '正式执行', manual: '主动快照', collect: '采集商品' };
+const MODES = { probe: '快照', dry: '测试演练', auto: '正式执行', manual: '主动快照' };
 const MAX_LOG_CHARS = 600000;
 
 function taskCommand(input) {
@@ -21,12 +20,6 @@ function taskCommand(input) {
   if (!task || !Object.hasOwn(MODES, input.mode)) throw new Error('未知脚本或执行模式');
   const options = input.options ?? {};
   if (!options || typeof options !== 'object' || Array.isArray(options)) throw new Error('执行参数格式错误');
-  if ((task.id === 'temu') !== (input.mode === 'collect')) throw new Error('Temu 仅支持采集模式，发货流程不支持采集模式');
-  if (task.id === 'temu') {
-    const limit = options.limit ?? 200;
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200) throw new Error('limit 必须是 1–200 的整数');
-    return { task, args: ['index.js', `--limit=${limit}`], cwd: path.join(ROOT, task.directory) };
-  }
   const args = ['index.js'];
   if (task.id === 'shipping') args.push('--close-browser');
   if (input.mode === 'probe') args.push('probe');
@@ -50,7 +43,7 @@ function taskCommand(input) {
   return { task, args, cwd: path.join(ROOT, task.directory) };
 }
 
-function createApp({ spawnProcess = spawn, runDir = path.join(ROOT, '.web-runs'), profileRoot = ROOT, dataRoot = ROOT } = {}) {
+function createApp({ spawnProcess = spawn, runDir = path.join(ROOT, '.web-runs'), profileRoot = ROOT } = {}) {
   const clients = new Set();
   const instance = randomUUID();
   let revision = 0;
@@ -129,16 +122,6 @@ function createApp({ spawnProcess = spawn, runDir = path.join(ROOT, '.web-runs')
         return;
       }
       if (request.method === 'GET' && url.pathname === '/api/shots') return json(response, 200, { shots: await screenshots() });
-      if (request.method === 'GET' && url.pathname.startsWith('/api/data/temu/')) {
-        const parts = url.pathname.split('/');
-        const filename = decodeURIComponent(parts[4] || '');
-        if (parts.length !== 5 || !/^temu-[\d]+-[a-f\d-]+\.(json|csv)$/.test(filename)) return json(response, 404, { error: '结果不存在' });
-        const directory = path.join(dataRoot, 'temu-auto', 'data');
-        const real = await fs.promises.realpath(path.join(directory, filename)).catch(() => '');
-        if (!real || path.dirname(real) !== await fs.promises.realpath(directory)) return json(response, 404, { error: '结果不存在' });
-        response.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-        return serveFile(response, real, filename.endsWith('.csv') ? 'text/csv; charset=utf-8' : 'application/json; charset=utf-8');
-      }
       if (request.method === 'GET' && (url.pathname.startsWith('/api/shots/') || url.pathname.startsWith('/api/dom/'))) {
         const parts = url.pathname.split('/');
         const task = TASKS.find((item) => item.id === parts[3]);
@@ -211,19 +194,6 @@ function createApp({ spawnProcess = spawn, runDir = path.join(ROOT, '.web-runs')
         broadcast('state', state());
         return json(response, 202, { status: 'stopping' });
       }
-      if (request.method === 'POST' && url.pathname === '/api/resume') {
-        if (!request.headers['content-type']?.startsWith('application/json')) return json(response, 415, { error: '请使用 JSON 请求' });
-        let body = '';
-        for await (const chunk of request) {
-          body += chunk;
-          if (Buffer.byteLength(body) > 8192) return json(response, 413, { error: '请求过大' });
-        }
-        let id;
-        try { id = JSON.parse(body).id; } catch { return json(response, 400, { error: '请求格式错误' }); }
-        if (closing || !child?.connected || current?.id !== id || current.status !== 'running' || current.task !== 'temu' || !current.waitingForUser || current.stopRequested) return json(response, 409, { error: '当前没有等待处理的采集任务' });
-        child.send({ type: 'resume' }, (error) => { if (error) append('stderr', `继续采集失败：${error.message}\n`); });
-        return json(response, 202, { status: 'resuming' });
-      }
       if (request.method === 'POST' && url.pathname === '/api/run') {
         if (closing) return json(response, 503, { error: '服务正在关闭' });
         if (!request.headers['content-type']?.startsWith('application/json')) return json(response, 415, { error: '请使用 JSON 请求' });
@@ -253,7 +223,6 @@ function createApp({ spawnProcess = spawn, runDir = path.join(ROOT, '.web-runs')
           current.status = current.stopRequested ? 'stopped' : code === 0 ? 'succeeded' : 'failed';
           current.exitCode = code;
           current.endedAt = new Date().toISOString();
-          current.waitingForUser = false;
           child = null;
           revision++;
           broadcast('state', state());
@@ -263,22 +232,12 @@ function createApp({ spawnProcess = spawn, runDir = path.join(ROOT, '.web-runs')
           child = spawnProcess(process.execPath, command.args, {
             cwd: command.cwd,
             env: { ...process.env, DRY: current.mode === 'dry' ? '1' : '0', DEBUG: current.mode === 'dry' ? '1' : '0', CDP: '', PROFILE: '', FORCE_COLOR: '0', NO_COLOR: '1' },
-            stdio: current.mode === 'manual' || current.task === 'temu' ? ['ignore', 'pipe', 'pipe', 'ipc'] : ['ignore', 'pipe', 'pipe'], shell: false,
+            stdio: current.mode === 'manual' ? ['ignore', 'pipe', 'pipe', 'ipc'] : ['ignore', 'pipe', 'pipe'], shell: false,
           });
           child.on('message', (message) => {
             if (!message || typeof message !== 'object') return;
             if (message.type === 'snapshot-ready') { current.snapshotReady = true; revision++; broadcast('state', state()); }
             if (message.type === 'snapshot-result' && snapshotPending?.id === message.id) snapshotPending.done(message);
-            if (current.task === 'temu' && message.type === 'user-action') {
-              current.waitingForUser = message.waiting === true;
-              current.waitReason = typeof message.reason === 'string' ? message.reason : '';
-              revision++; broadcast('state', state());
-            }
-            if (current.task === 'temu' && message.type === 'collection-progress') {
-              current.collection = { count: message.count, target: message.target, status: message.status, missing: message.missing };
-              current.resultFiles = (Array.isArray(message.files) ? message.files : []).filter((name) => typeof name === 'string' && /^temu-[\d]+-[a-f\d-]+\.(json|csv)$/.test(name));
-              revision++; broadcast('state', state());
-            }
           });
           for (const stream of ['stdout', 'stderr']) {
             child[stream].setEncoding('utf8');

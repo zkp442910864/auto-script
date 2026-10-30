@@ -1,6 +1,6 @@
 # 发货自动化控制台
 
-统一操作 `shipping-auto`（创建发货单）、`packing-auto`（装箱发货）和 `temu-auto`（商品采集）。
+统一操作现有的 `shipping-auto`（创建发货单）和 `packing-auto`（装箱发货）。
 提供快照、测试演练、正式执行、实时日志、截图预览和日志下载。
 
 ## 启动
@@ -8,7 +8,7 @@
 需要 Node.js 18+、本机已安装 Google Chrome。
 
 ```bash
-# 在项目根目录，首次安装各脚本的 playwright-core 依赖
+# 在项目根目录，首次安装两套脚本的 playwright-core 依赖
 npm run setup
 
 # 启动 Web 控制台（Web 本身没有第三方依赖）
@@ -52,7 +52,6 @@ web/
 shipping-auto/       原有创建发货单脚本及 docs.md
 packing-auto/        原有装箱发货脚本及 docs.md
 AGENT.md             项目与代理开发说明
-temu-auto/           Temu 搜索采集脚本及 docs.md
 ```
 
 页面可通过「清除登录信息」删除对应的本地 Chrome 配置，下次执行需重新登录。装箱勾选复用时清除共享的发货配置；取消勾选时清除装箱独立配置。清除前请关闭使用该配置的 Chrome 窗口，任务运行中不可清除。
@@ -62,33 +61,3 @@ temu-auto/           Temu 搜索采集脚本及 docs.md
 点击对应流程的「主动快照」，等待日志提示就绪，在 Chrome 中登录并手动操作到目标步骤。每次节点渲染完成后点击日志区的「抓取当前页面」，可以连续抓取弹窗、下拉面板和下一步页面。该模式只打开流程入口，不自动执行发货操作；手动操作仍按商家后台自身行为生效。
 
 每次保存全部打开标签页的 PNG 和同名 JSON，JSON 包含页面 URL、抓取时间及各 frame 的当前 HTML。页面快照区可预览截图、下载 DOM，文件也保存在对应脚本的 `shots/` 下。跨多个页面的抓取按顺序执行，建议抓取期间暂停手动操作，完成后再进入下一步。点击「结束快照」关闭浏览器并释放任务锁；刷新控制台后仍可继续抓取。
-
-## Temu 商品采集
-
-控制台的「Temu 贴纸商品」默认采集指定搜索页的前 200 条商品，按页面出现顺序和商品 ID 去重。支持滚动懒加载和「加载更多」按钮。采集主图链接、页面展示价格（含币种）、评分、销量，并附商品 ID、标题和链接；页面未展示的字段留空，不推测数值。
-
-遇到登录、安全验证或加载停滞时，保留浏览器窗口并发送本机 Windows / macOS 通知。手动完成后，已识别的登录/验证消失且商品出现时自动继续；也可点击「继续采集」。加载停滞需处理后点击继续。系统须允许 PowerShell（Windows）或脚本编辑器/osascript（macOS）通知；系统静音或专注模式可能屏蔽提示，控制台始终显示等待原因。
-
-每批数据更新 `temu-auto/data/temu-*.json` 和同名 CSV（带 UTF-8 BOM，适合 Excel）。停止、异常或结果不足时也保存已采集数据；JSON 包含完成状态、实际条数、缺失字段统计和卡片原始文本。完成后在控制台下载结果。不要把结果数不足 200 的部分导出视为完整采集。登录目录独立于发货和装箱。
-
-```bash
-# 也可直接运行，首次在弹出的 Chrome 中登录
-npm run collect:temu
-# 先采 10 条
-npm run collect:temu -- --limit=10
-```
-
-实际站点测试目前确认会进入登录页；真实商品字段和完整 200 条仍需用户完成登录后核对。自动化测试覆盖本地页面的滚动、加载更多、去重、验证暂停/恢复、部分导出及控制台互斥，不操作发货业务。Windows 通知代码已测试参数和中文编码，仍需 Windows 实机确认显示。
-
-### 浏览器扩展
-
-默认使用本机 Chrome，保留扩展功能（不带 `--disable-extensions`），可在脚本独立配置中自行安装兼容扩展。它不会读取你平时 Chrome 配置中的登录和扩展。新版 Chrome 已移除命令行侧载扩展参数；自动加载本地解压扩展使用 Playwright Chromium：
-
-```bash
-# 安装依赖后，仅在需要本地扩展时安装 Chromium
-cd temu-auto
-npx playwright-core install chromium
-node index.js --extension="/absolute/path/to/unpacked-extension"
-```
-
-扩展目录需要 `manifest.json`，此模式使用独立 `.pw-profile-chromium/`，首次需重新登录。控制台入口使用默认 Chrome；`--extension` 目前仅提供命令行入口。详见 [Playwright 扩展文档](https://playwright.dev/docs/chrome-extensions)。

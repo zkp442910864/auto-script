@@ -19,12 +19,10 @@ function controls() {
   document.querySelectorAll('button, input').forEach((item) => { item.disabled = busy; });
   $('#download').disabled = busy || !run;
   $('#stop').disabled = !connected || pending || run?.status !== 'running' || Boolean(run?.stopRequested);
-  $('#resume').hidden = !run?.waitingForUser;
-  $('#resume').disabled = !connected || pending || run?.status !== 'running' || !run?.waitingForUser || Boolean(run?.stopRequested);
   $('#capture').disabled = !connected || capturing || pending || run?.status !== 'running' || run?.mode !== 'manual' || !run?.snapshotReady || Boolean(run?.stopRequested);
   $('#capture').textContent = capturing ? '正在抓取…' : '▣ 抓取当前页面';
   $('#stop').textContent = run?.stopRequested ? '正在停止…' : run?.mode === 'manual' ? '结束快照' : '■ 停止执行';
-  document.querySelectorAll('.shot, .brand, #result-downloads a').forEach((link) => {
+  document.querySelectorAll('.shot, .brand').forEach((link) => {
     link.setAttribute('aria-disabled', String(busy));
     link.tabIndex = busy ? -1 : 0;
   });
@@ -32,11 +30,10 @@ function controls() {
   const notice = $('#notice');
   notice.classList.toggle('running', Boolean(run?.status === 'running'));
   notice.textContent = !connected ? '服务连接已断开，正在自动重连；同步状态后才能继续操作。' : pending ? '正在启动脚本，请稍候…' : run?.status === 'running' ? `正在${run.stopRequested ? '停止' : '执行'}「${run.taskName} · ${modeLabel(run.mode)}」，其他操作已锁定。` : '准备就绪 · 建议先查看快照，再测试演练，最后正式执行。';
-  if (connected && run?.status === 'running' && run.waitingForUser && !run.stopRequested) notice.textContent = `等待你处理：${run.waitReason}。处理后点击「继续采集」。`;
   $('#connection-dot').classList.toggle('offline', !connected);
   $('#connection-text').textContent = connected ? '服务已连接' : '正在连接服务';
 }
-function modeLabel(mode) { return { probe: '快照', dry: '测试演练', auto: '正式执行', manual: '主动快照', collect: '采集商品' }[mode] || mode; }
+function modeLabel(mode) { return { probe: '快照', dry: '测试演练', auto: '正式执行', manual: '主动快照' }[mode] || mode; }
 function clock(value) { return new Date(value).toLocaleString('zh-CN', { hour12: false }); }
 function updateTime() {
   if (!run) return;
@@ -60,19 +57,6 @@ function applyState(data) {
   run = data.run;
   connected = true;
   pending = false;
-  $('#collection-progress').hidden = !run?.collection;
-  if (run?.collection) {
-    const collection = run.collection;
-    const missing = collection.missing || {};
-    $('#collection-progress').textContent = `采集 ${collection.count}/${collection.target} 条 · ${({ collecting: '采集中', waiting: '等待处理', complete: '已达到条数', partial: '部分结果', stopped: '已停止', failed: '采集失败' })[collection.status] || collection.status} · 字段缺失：主图 ${missing.mainImage ?? 0}，价格 ${missing.price ?? 0}，评分 ${missing.rating ?? 0}，销量 ${missing.sales ?? 0}`;
-  }
-  $('#result-downloads').replaceChildren();
-  for (const file of run?.resultFiles || []) {
-    const link = document.createElement('a');
-    link.href = `/api/data/temu/${encodeURIComponent(file)}`;
-    link.textContent = `↓ 下载 ${file.endsWith('.csv') ? 'CSV' : 'JSON'} 采集结果`;
-    $('#result-downloads').append(link);
-  }
   if (run) {
     // Rebuild from the server's bounded buffer on every reconnect; no missing or duplicated chunks.
     logs.replaceChildren();
@@ -83,7 +67,6 @@ function applyState(data) {
     runId = run.id;
     $('#run-title').textContent = `${run.taskName} / ${modeLabel(run.mode)}`;
     $('#run-status').textContent = { running: 'RUNNING', succeeded: 'EXIT 0', stopped: 'STOPPED', failed: `FAILED · ${run.exitCode ?? 'ERROR'}` }[run.status];
-    if (run.status === 'running' && run.waitingForUser) $('#run-status').textContent = 'WAITING';
     $('#log-count').textContent = run.status === 'running' ? 'stdout / stderr · 实时同步' : '进程结束 · 请核对业务日志';
     updateTime();
   } else {
@@ -111,7 +94,7 @@ async function refreshShots() {
       const img = document.createElement('img'); img.src = shot.url; img.alt = shot.name; img.loading = 'lazy';
       const info = document.createElement('div'); info.className = 'shot-info';
       const title = document.createElement('span'); title.className = 'shot-title'; title.textContent = shot.name; title.title = shot.name;
-      const time = document.createElement('span'); time.className = 'shot-time'; time.textContent = `${({ shipping: '创建发货单', packing: '装箱发货', temu: 'Temu 商品采集' })[shot.task] || shot.task} · ${clock(shot.modified)}`;
+      const time = document.createElement('span'); time.className = 'shot-time'; time.textContent = `${shot.task === 'shipping' ? '创建发货单' : '装箱发货'} · ${clock(shot.modified)}`;
       info.append(title, time); link.append(img, info); $('#shots').append(link);
       if (shot.domUrl) {
         const dom = document.createElement('a');
@@ -167,7 +150,7 @@ document.querySelectorAll('[data-clear]').forEach((button) => button.addEventLis
   if (!connected || pending || run?.status === 'running') return;
   const reuse = button.dataset.clear === 'packing' && button.closest('[data-task]').querySelector('[name=reuseShippingProfile]').checked;
   const profile = reuse ? 'shipping' : button.dataset.clear;
-  const name = ({ shipping: '创建发货单（共享）', packing: '装箱发货（独立）', temu: 'Temu 商品采集' })[profile];
+  const name = profile === 'shipping' ? '创建发货单（共享）' : '装箱发货（独立）';
   if (!window.confirm(`确定清除${name}的浏览器登录信息吗？下次运行需要重新登录。请先关闭使用该配置的 Chrome 窗口。`)) return;
   pending = true; controls();
   try {
@@ -195,16 +178,6 @@ $('#stop').addEventListener('click', async () => {
   }
 });
 $('#download').addEventListener('click', () => { window.location.href = '/api/log'; });
-$('#resume').addEventListener('click', async () => {
-  if ($('#resume').disabled) return;
-  $('#resume').disabled = true;
-  try {
-    const response = await fetch('/api/resume', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: run.id }) });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error || '继续失败');
-  } catch (error) { $('#error').textContent = error.message; $('#error').hidden = false; }
-  finally { controls(); }
-});
 document.addEventListener('click', (event) => {
   if (document.body.classList.contains('busy') && event.target.closest('a')) event.preventDefault();
 });
