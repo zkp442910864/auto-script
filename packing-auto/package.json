@@ -1,0 +1,17 @@
+{
+  "name": "kuajing-packing-auto",
+  "private": true,
+  "version": "1.0.0",
+  "description": "跨境卖货发货单列表 - 批量装箱发货（勾第一行 → 批量装箱发货 → 填箱数 → 预约取货时间 → 确认发货）",
+  "scripts": {
+    "probe": "node index.js probe",
+    "dry": "node index.js --dry --debug",
+    "auto": "node index.js",
+    "auto:debug": "node index.js --debug",
+    "probe:reuse": "node index.js probe --profile=../shipping-auto/.pw-profile",
+    "auto:reuse": "node index.js --profile=../shipping-auto/.pw-profile"
+  },
+  "dependencies": {
+    "playwright-core": "^1.48.0"
+  }
+}

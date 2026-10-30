@@ -1,0 +1,7 @@
+node_modules/
+.pw-profile/
+shots/
+.web-runs/
+.DS_Store
+.pw-profile-chromium/
+temu-auto/data/

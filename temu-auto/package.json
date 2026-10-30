@@ -1,0 +1,12 @@
+{
+  "name": "temu-search-collector",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "auto": "node index.js",
+    "test": "node --test collector.test.js"
+  },
+  "dependencies": {
+    "playwright-core": "^1.48.0"
+  }
+}
