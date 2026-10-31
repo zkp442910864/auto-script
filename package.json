@@ -10,6 +10,7 @@
     "setup": "npm --prefix shipping-auto install && npm --prefix packing-auto install",
     "test": "node --test web/server.test.js shared/browser-session.test.js",
     "test:browser": "node --test shared/browser-integration.test.js",
+    "test:packing": "node --test packing-auto/dialogs.test.js",
     "test:login": "node --test login-auto/login.test.js"
   }
 }

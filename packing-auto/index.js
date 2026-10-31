@@ -8,12 +8,14 @@
  *   2) 【循环】
  *      2.1 勾选第一行（发货单号 FH 开头的那个）
  *      2.2 点工具栏「批量装箱发货」
+ *          → 若弹包裹/发货数提醒，勾选「30天内不再提醒」并点「去装箱发货」
+ *          → 若提示发货/收货详细地址均相同，点「一起发货」
  *          → 若弹「同仓库单一起装箱」确认框，点确认
  *      2.3 右侧抽屉「装箱发货」打开
  *          → 填「发货总箱/包数」= 1
  *          → 等仓库/物流信息加载完（物流公司 有值 + 预约取货时间 解除禁用）
- *      2.4 设「预约取货时间」= 最近可选日期（面板里第一个可点的日期格）
- *      2.5 点「确认发货」提交
+ *      2.4 设「预约取货时间」= 最近可选日期，时间优先 20:00，不可选则取最近可选时间
+ *      2.5 点「确认发货」，若弹「确认装箱完毕并发货？」再点弹窗内「确认发货」
  *   3) 回到 2)，直到列表没有待装箱数据
  *
  * 用法：
@@ -46,7 +48,7 @@
  *   1) 物流公司的值不在 input.value 里，只是一段可见文本（input 是空的搜索框）；
  *   2) 预约取货时间是"双列滚轮"（小时列 + 分钟列，格子只有裸数字），
  *      已经过去 / 不足 1 小时的时段会带 cIL_disabled，
- *      所以"最近可选"= 每列第一个不带 disabled 的格子（≈ 当前时间 + 1 小时）。
+ *      优先选择 20:00；不可选时取每列第一个不带 disabled 的格子。
  *
  * 设计原则（和 shipping-auto 一致）：
  *   · 一律"看页面自己的状态"，不用 sleep 猜：
@@ -104,6 +106,7 @@ const SEL = {
   pickupTime: '#expectPickUpGoodsTime',
   checkbox: '[data-testid="beast-core-checkbox"]',
   deliverMethod: '#deliverMethod',
+  dialog: '[data-testid="beast-core-modal"], [role="dialog"], [role="alertdialog"], [class*="Dialog"], [class*="dialog"], [class*="Modal"], [class*="modal"], [class*="Popconfirm"], [class*="opconfirm"]',
 };
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -269,80 +272,52 @@ async function clearSelection(page) {
 
 /* ------------------------------- 浮层确认框 ------------------------------- */
 
-/**
- * 「批量装箱发货」偶尔会弹同仓库提示框。
- * 判定：可见的 dialog/popover 容器、含「确认/确定」按钮、且不是抽屉本体。
- * 找不到就安静返回 false（不截图、不刷日志）——
- * 之前那版把抽屉里的「装箱发货」标题当成了提示文案，误判了一次。
- */
-async function findConfirmDialog(page) {
-  return page
-    .evaluate(() => {
-      const vis = (el) => {
-        const cs = getComputedStyle(el);
-        const r = el.getBoundingClientRect();
-        return cs.display !== 'none' && cs.visibility !== 'hidden' && r.width > 0 && r.height > 0;
-      };
-      const cands = [];
-      const sels = [
-        '[role="dialog"]',
-        '[class*="Dialog"]',
-        '[class*="dialog"]',
-        '[class*="Modal"]',
-        '[class*="modal"]',
-        '[class*="opconfirm"]',
-        '[class*="Popconfirm"]',
-        '[class*="Popover"]',
-        '[class*="popover"]',
-        '[class*="confirm"]',
-      ];
-      for (const sel of sels) {
-        for (const el of document.querySelectorAll(sel)) {
-          if (!vis(el)) continue;
-          if (el.querySelector('#expressPackageNum')) continue; // 抽屉本体，跳过
-          if (el.closest('[data-testid="beast-core-drawer"]')) continue;
-          const btns = Array.from(el.querySelectorAll('button')).filter((b) => {
-            const t = (b.innerText || '').trim();
-            return /^(确认|确定|继续|确认装箱|一起装箱|确认合并)/.test(t) && vis(b);
-          });
-          if (!btns.length) continue;
-          const r = el.getBoundingClientRect();
-          if (r.width < 100 || r.height < 40) continue;
-          const br = btns[0].getBoundingClientRect();
-          cands.push({
-            text: (el.innerText || '').replace(/\s+/g, ' ').slice(0, 200),
-            btn: (btns[0].innerText || '').trim(),
-            x: br.x + br.width / 2,
-            y: br.y + br.height / 2,
-          });
-        }
-      }
-      if (!cands.length) return null;
-      cands.sort((a, b) => a.text.length - b.text.length);
-      return cands[0];
-    })
-    .catch(() => null);
+/** 按阶段匹配已知文案和按钮，始终限定在弹窗内，不复点抽屉的提交按钮。 */
+async function findConfirmDialog(page, stage) {
+  const specs = stage === 'submit'
+    ? [{ text: /确认装箱完毕并发货[？?]/, button: /^确认发货$/ }]
+    : [
+      { text: /确认包裹和发货数/, button: /^去装箱发货$/, reminder: true },
+      { text: /发货\s*\/\s*收货详细地址[\s\S]*均相同/, button: /^一起发货$/ },
+      { text: /同(?:一)?仓库|一起装箱/, button: /^(确认|确定|继续|确认装箱|一起装箱|确认合并)$/ },
+    ];
+  for (const spec of specs) {
+    const roots = page.locator(SEL.dialog).filter({ hasText: spec.text });
+    for (let i = 0; i < await roots.count(); i++) {
+      const root = roots.nth(i);
+      if (!(await root.isVisible())) continue;
+      // 排除包含整个表单的抽屉或页面级容器；弹窗本体不会包含箱数字段。
+      if (await root.locator(SEL.boxNum).count()) continue;
+      const button = await firstVisible(root.getByRole('button', { name: spec.button }));
+      if (button) return { root, button, reminder: spec.reminder };
+    }
+  }
+  return null;
 }
 
-/** 点完「批量装箱发货」后等一小会儿，有确认框就确认掉 */
-async function confirmSameWarehouseDialog(page, timeout = 3500) {
-  const t0 = Date.now();
-  while (Date.now() - t0 < timeout) {
-    const dlg = await findConfirmDialog(page);
-    if (dlg) {
-      log(`  ⇢ 出现确认框：${dlg.text.slice(0, 90)}`);
-      log(`  ⇢ 点击「${dlg.btn}」`);
-      if (CFG.dry) return true;
-      await page.mouse.click(dlg.x, dlg.y);
-      await sleep(1200);
-      await settle(page, 400);
-      log('  ✓ 确认框已处理');
-      return true;
+async function confirmPackingEntryDialog(page) {
+  const dlg = await findConfirmDialog(page, 'entry');
+  if (!dlg) return false;
+  log(`  ⇢ 出现装箱提示：${(await dlg.root.innerText()).replace(/\s+/g, ' ').slice(0, 90)}`);
+  if (dlg.reminder) {
+    const label = await firstVisible(dlg.root.locator('label').filter({ hasText: /30\s*天(?:内)?不再提醒/ }));
+    if (!label) throw new Error('装箱提醒中找不到「30天内不再提醒」，停止处理');
+    const checked = () => label.evaluate((el) => {
+      const input = el.querySelector('input[type="checkbox"]');
+      return input ? input.checked : el.getAttribute('data-checked') === 'true';
+    });
+    if (!(await checked())) await label.click({ timeout: 5000 });
+    const deadline = Date.now() + 2000;
+    while (!(await checked())) {
+      if (Date.now() >= deadline) throw new Error('未能勾选「30天内不再提醒」，停止处理');
+      await sleep(100);
     }
-    await sleep(400);
+    log('  ✓ 已勾选「30天内不再提醒」');
   }
-  dlog('没有同仓库确认框，直接进抽屉');
-  return false;
+  log(`  ⇢ 点击「${(await dlg.button.innerText()).trim()}」`);
+  await dlg.button.click({ timeout: 8000 });
+  await dlg.root.waitFor({ state: 'hidden', timeout: 8000 });
+  return true;
 }
 
 /* ------------------------------- 工具栏动作 ------------------------------- */
@@ -363,7 +338,6 @@ async function clickBatchPack(page) {
     return false;
   }
   log('点击「批量装箱发货」');
-  if (CFG.dry) return true;
   await btn.click({ timeout: 15000 }).catch((e) => log('  点击异常：', e.message.split('\n')[0]));
   await sleep(1500);
   return true;
@@ -383,6 +357,7 @@ async function drawerOpened(page) {
 async function waitDrawer(page, timeout = 25000) {
   const t0 = Date.now();
   while (Date.now() - t0 < timeout) {
+    await confirmPackingEntryDialog(page);
     if (await drawerOpened(page)) {
       log('  ✓ 装箱发货抽屉已打开');
       return true;
@@ -476,7 +451,6 @@ async function fillBoxCount(page, n = CFG.boxCount) {
     return false;
   }
   log(`  填「发货总箱/包数」= ${n}${st.value ? `（原值 ${st.value}）` : ''}`);
-  if (CFG.dry) return true;
 
   await input.click({ timeout: 8000 }).catch(() => {});
   await input.fill(String(n)).catch(async () => {
@@ -540,7 +514,6 @@ async function ensureCompany(page, timeout = 15000) {
     await sleep(800);
   }
   log('  · 物流公司迟迟没带出来，手动选第一个');
-  if (CFG.dry) return '(演练未选)';
 
   const header = page.locator(`${SEL.company} [data-testid="beast-core-select-header"]`).first();
   const target = (await header.count().catch(() => 0)) > 0 ? header : page.locator(SEL.company).first();
@@ -685,36 +658,45 @@ async function pickFirstInPanel(page, box, kind = 'day') {
 /**
  * 时间选择是「小时列 + 分钟列」的滚轮列表：
  *   ul[class*="TPK_ul"]  →  li[class*="cIL_item"]（禁用时带 cIL_disabled）
- * 已经过去的时段会被置为 disabled，所以"最近可选"= 每一列第一个非 disabled 的格子。
- * 先点小时列、再点分钟列（点完小时，分钟列的可用集合可能会变，所以每列都重新查）。
+ * 优先选 20:00；小时 20 或对应分钟 00 不可选时，重新选择最近可选的小时和分钟。
+ * 点完小时后重新查询分钟列，避免使用切换小时前的可用状态。
  */
 async function pickTimeWheel(page) {
-  const lists = page.locator('[class*="TPK_ul"]');
-  const cnt = await lists.count().catch(() => 0);
-  if (!cnt) return false;
-
-  let clicked = 0;
-  for (let i = 0; i < cnt; i++) {
-    const ul = lists.nth(i);
-    if (!(await ul.isVisible().catch(() => false))) continue;
-    const opt = ul.locator('[class*="cIL_item"]:not([class*="disabled"])').first();
-    if ((await opt.count().catch(() => 0)) === 0) {
-      dlog(`第 ${i + 1} 列没有可选项`);
-      continue;
-    }
+  const lists = page.locator('[class*="TPK_ul"]:visible');
+  if (await lists.count() < 2) return false;
+  const choices = (column) => lists.nth(column).locator(
+    '[class*="cIL_item"]:visible:not([class*="disabled" i]):not([aria-disabled="true"]):not([disabled])'
+  );
+  const choose = async (opt, column) => {
     const label = (await opt.innerText().catch(() => '')).trim();
-    await opt.scrollIntoViewIfNeeded().catch(() => {});
+    await opt.scrollIntoViewIfNeeded();
     await sleep(120);
-    await opt.click({ timeout: 5000 }).catch(() => {});
+    await opt.click({ timeout: 5000 });
     await sleep(400);
-    dlog(`滚轮第 ${i + 1} 列 → ${label}`);
-    clicked++;
+    dlog(`滚轮第 ${column + 1} 列 → ${label}`);
+  };
+
+  const hour20 = choices(0).filter({ hasText: /^20$/ }).first();
+  if (await hour20.count()) {
+    await choose(hour20, 0);
+    const minute00 = choices(1).filter({ hasText: /^0{1,2}$/ }).first();
+    if (await minute00.count()) {
+      await choose(minute00, 1);
+      log('  ✓ 已优先选择取货时间 20:00');
+      return true;
+    }
   }
-  return clicked > 0;
+  log('  · 20:00 不可选，改选最近可选时间');
+  for (let column = 0; column < 2; column++) {
+    const opt = choices(column).first();
+    if (!(await opt.count())) return false;
+    await choose(opt, column);
+  }
+  return true;
 }
 
 /**
- * 设「预约取货时间」= 最近可选时间。
+ * 设「预约取货时间」= 最近可选日期，时间优先 20:00。
  * 日期框、时间框是两个独立控件（#expectPickUpGoodsDate / #expectPickUpGoodsTime）。
  */
 async function setPickupNearest(page) {
@@ -730,11 +712,6 @@ async function setPickupNearest(page) {
     log('  ✗ 日期框还是禁用状态，说明可预约时段还没拉回来');
     await shot(page, 'pickup-disabled');
     return false;
-  }
-
-  if (CFG.dry) {
-    log('  [演练] 将点开日期面板选最近可选日期、时间滚轮选最近可选时间');
-    return true;
   }
 
   // ① 日期
@@ -775,7 +752,7 @@ async function setPickupNearest(page) {
 
   // ② 时间（双列滚轮）
   let tv = (await timeInput.inputValue().catch(() => '')).trim();
-  if (!tv) {
+  if (tv !== '20:00') {
     await timeInput.click({ timeout: 8000 }).catch(() => {});
     await sleep(900);
 
@@ -830,8 +807,9 @@ async function submitDrawer(page, needPickup = true) {
     return false;
   }
 
-  let btn = await firstVisible(page.locator(SEL.confirmShip));
-  if (!btn) btn = await firstVisible(page.locator('button').filter({ hasText: /^确认发货$/ }));
+  const drawer = await firstVisible(page.locator(SEL.drawer));
+  let btn = drawer && await firstVisible(drawer.locator(SEL.confirmShip));
+  if (!btn && drawer) btn = await firstVisible(drawer.getByRole('button', { name: /^确认发货$/ }));
   if (!btn) {
     log('  ✗ 找不到「确认发货」按钮');
     await shot(page, 'submit-notfound');
@@ -839,32 +817,25 @@ async function submitDrawer(page, needPickup = true) {
   }
 
   if (CFG.dry) {
-    log('  [演练] 将点击「确认发货」——演练中跳过');
+    await btn.scrollIntoViewIfNeeded();
+    log('  [演练] 已完成装箱填写，停在「确认发货」前；不点击提交或二次确认');
+    await shot(page, 'dry-ready');
     return true;
   }
 
   log('点击「确认发货」');
-  await btn.click({ timeout: 15000 }).catch(async (e) => {
-    log('  点击异常，改坐标点：', e.message.split('\n')[0]);
-    const bb = await btn.boundingBox().catch(() => null);
-    if (bb) await page.mouse.click(bb.x + bb.width / 2, bb.y + bb.height / 2);
-  });
-  await sleep(1200);
+  await btn.click({ timeout: 15000 });
 
-  // 可能的二层确认气泡：必须带问号，避免把抽屉里的「确认发货」本体再点一遍
-  for (let i = 0; i < 2; i++) {
-    if (!(await drawerOpened(page))) break;
-    const dlg = await findConfirmDialog(page);
-    if (!dlg || !/[？?]|确定要/.test(dlg.text)) break;
-    log(`  二层确认：${dlg.text.slice(0, 70)} → 点「${dlg.btn}」`);
-    await page.mouse.click(dlg.x, dlg.y);
-    await sleep(1200);
-  }
-
-  // 成功判据：抽屉关掉
+  // 在整个提交等待期轮询二次确认，兼容异步加载；每次提交最多确认一次。
   const t0 = Date.now();
+  let confirmed = false;
   while (Date.now() - t0 < 20000) {
-    if (!(await drawerOpened(page))) {
+    const dlg = await findConfirmDialog(page, 'submit');
+    if (dlg && !confirmed) {
+      log('  二次确认：「确认装箱完毕并发货？」→ 点击弹窗内「确认发货」');
+      await dlg.button.click({ timeout: 8000 });
+      confirmed = true;
+    } else if (!dlg && !(await drawerOpened(page))) {
       const toast = await readToast(page);
       log(`  ✓ 抽屉已关闭，提交完成${toast ? `（提示：${toast}）` : ''}`);
       return true;
@@ -903,7 +874,6 @@ async function probe(page) {
   }
 
   if (!(await clickBatchPack(page))) return;
-  await confirmSameWarehouseDialog(page);
   if (!(await waitDrawer(page))) {
     await shot(page, 'probe-drawer-fail');
     return;
@@ -1083,7 +1053,6 @@ async function processOne(page, target) {
     return false;
   }
 
-  await confirmSameWarehouseDialog(page);
   if (!(await waitDrawer(page))) {
     await shot(page, 'drawer-fail');
     return false;
@@ -1174,7 +1143,7 @@ async function runLoop(page) {
     if (ok) {
       success++;
       consecutiveFail = 0;
-      log(`✓ 第 ${round} 轮完成（累计 ${success} 单）`);
+      log(CFG.dry ? '✓ 测试演练完成，未确认发货' : `✓ 第 ${round} 轮完成（累计 ${success} 单）`);
     } else {
       consecutiveFail++;
       log(`✗ 第 ${round} 轮失败（连续 ${consecutiveFail} 次）`);
@@ -1185,10 +1154,12 @@ async function runLoop(page) {
       }
     }
 
+    // 演练只检查第一单；即使 CLI 未限制轮数，也不重新进入列表或处理下一单。
+    if (CFG.dry) break;
     await settle(page, 1200);
   }
 
-  log(`\n结束：成功提交 ${success} 单`);
+  log(CFG.dry ? `\n结束：演练完成 ${success} 单，未确认发货` : `\n结束：成功提交 ${success} 单`);
 }
 
 if (require.main === module) {
@@ -1210,6 +1181,8 @@ module.exports = {
   selectRow,
   clearSelection,
   clickBatchPack,
+  processOne,
+  waitDrawer,
   fieldState,
   fillBoxCount,
   waitWarehouseReady,
