@@ -87,29 +87,37 @@ test('无提示时直接识别抽屉；旧同仓库提示仍能确认', async (t
 });
 
 for (const dry of [false, true]) {
-  test(`同地址提示在${dry ? '演练' : '正式'}模式点击「一起发货」，连续提醒处理后进入抽屉`, async (t) => {
-    const page = await localPage(t, sameAddress);
+  test(`同地址合并后等待列表刷新，再次点击批量按钮（${dry ? '演练' : '正式'}模式）`, async (t) => {
+    const selectedRows = (merged) => `<table><tbody>
+      <tr><td><label data-testid="beast-core-checkbox" data-checked="true"></label>FH1234567890</td></tr>
+      <tr><td><label data-testid="beast-core-checkbox" data-checked="${merged}"></label>FH1234567891</td></tr>
+      <tr><td><label data-testid="beast-core-checkbox" data-checked="${merged}"></label>FH1234567892</td></tr>
+      </tbody></table><button data-tracking-id="R2Lild75FOBx_5nw">批量装箱发货</button>`;
+    const page = await localPage(t, selectedRows(false) + sameAddress);
     CFG.dry = dry;
     t.after(() => { CFG.dry = false; });
-    await page.evaluate(({ reminder, form }) => {
+    await page.evaluate(({ list, reminder, form }) => {
       window.entryClicks = [];
-      document.querySelectorAll('button').forEach((button) => {
-        button.onclick = () => {
-          entryClicks.push(button.textContent);
-          if (button.textContent !== '一起发货') return;
-          document.body.innerHTML = reminder;
+      document.querySelector('[data-testid="beast-core-modal"] button').onclick = () => {
+        entryClicks.push('一起发货');
+        document.querySelector('[data-testid="beast-core-modal"]').remove();
+        setTimeout(() => {
+          document.body.innerHTML = list;
           document.querySelector('button').onclick = () => {
-            entryClicks.push('去装箱发货');
-            window.reminderChecked = document.querySelector('input').checked;
-            document.body.innerHTML = form;
+            entryClicks.push('批量装箱发货');
+            document.body.innerHTML = reminder;
+            document.querySelector('button').onclick = () => {
+              entryClicks.push('去装箱发货');
+              window.reminderChecked = document.querySelector('input').checked;
+              document.body.innerHTML = form;
+            };
           };
-        };
-      });
-    }, { reminder: entry(false), form: drawer });
-    assert.equal(await waitDrawer(page, 3000), true);
-    assert.deepEqual(await page.evaluate(() => entryClicks), ['一起发货', '去装箱发货']);
+        }, 1200);
+      };
+    }, { list: selectedRows(true), reminder: entry(false), form: drawer });
+    assert.equal(await waitDrawer(page, 8000), true);
+    assert.deepEqual(await page.evaluate(() => entryClicks), ['一起发货', '批量装箱发货', '去装箱发货']);
     assert.equal(await page.evaluate(() => reminderChecked), true);
-    assert.equal(await page.locator('[data-testid="beast-core-drawer"]').isVisible(), true);
   });
 }
 

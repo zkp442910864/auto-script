@@ -278,7 +278,7 @@ async function findConfirmDialog(page, stage) {
     ? [{ text: /确认装箱完毕并发货[？?]/, button: /^确认发货$/ }]
     : [
       { text: /确认包裹和发货数/, button: /^去装箱发货$/, reminder: true },
-      { text: /发货\s*\/\s*收货详细地址[\s\S]*均相同/, button: /^一起发货$/ },
+      { text: /发货\s*\/\s*收货详细地址[\s\S]*均相同/, button: /^一起发货$/, merge: true },
       { text: /同(?:一)?仓库|一起装箱/, button: /^(确认|确定|继续|确认装箱|一起装箱|确认合并)$/ },
     ];
   for (const spec of specs) {
@@ -289,7 +289,7 @@ async function findConfirmDialog(page, stage) {
       // 排除包含整个表单的抽屉或页面级容器；弹窗本体不会包含箱数字段。
       if (await root.locator(SEL.boxNum).count()) continue;
       const button = await firstVisible(root.getByRole('button', { name: spec.button }));
-      if (button) return { root, button, reminder: spec.reminder };
+      if (button) return { root, button, reminder: spec.reminder, merge: spec.merge };
     }
   }
   return null;
@@ -298,6 +298,14 @@ async function findConfirmDialog(page, stage) {
 async function confirmPackingEntryDialog(page) {
   const dlg = await findConfirmDialog(page, 'entry');
   if (!dlg) return false;
+  let expected = [];
+  if (dlg.merge) {
+    const rows = await collectRows(page);
+    for (const row of rows) if (await rowChecked(row)) expected.push(row.fh);
+    expected.push(...((await dlg.root.innerText()).match(/FH\d{8,}/g) || []));
+    expected = [...new Set(expected)];
+    if (expected.length < 2) throw new Error('无法确认一起发货的单号，停止处理');
+  }
   log(`  ⇢ 出现装箱提示：${(await dlg.root.innerText()).replace(/\s+/g, ' ').slice(0, 90)}`);
   if (dlg.reminder) {
     const label = await firstVisible(dlg.root.locator('label').filter({ hasText: /30\s*天(?:内)?不再提醒/ }));
@@ -317,6 +325,27 @@ async function confirmPackingEntryDialog(page) {
   log(`  ⇢ 点击「${(await dlg.button.innerText()).trim()}」`);
   await dlg.button.click({ timeout: 8000 });
   await dlg.root.waitFor({ state: 'hidden', timeout: 8000 });
+  if (dlg.merge) {
+    log('  ⇢ 等待列表刷新并确认合并的发货单已勾选');
+    const deadline = Date.now() + 25000;
+    let readySince = 0;
+    while (Date.now() < deadline) {
+      const rows = await collectRows(page);
+      const checked = [];
+      for (const row of rows) if (await rowChecked(row)) checked.push(row.fh);
+      const btn = await firstVisible(batchPackBtn(page));
+      const ready = expected.every((fh) => checked.includes(fh)) && btn && !(await btn.isDisabled());
+      if (ready) {
+        if (!readySince) readySince = Date.now();
+        if (Date.now() - readySince >= 1000) {
+          if (!(await clickBatchPack(page))) throw new Error('刷新后无法重新点击「批量装箱发货」');
+          return true;
+        }
+      } else readySince = 0;
+      await sleep(250);
+    }
+    throw new Error('等待合并后的列表刷新超时，停止处理');
+  }
   return true;
 }
 
