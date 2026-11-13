@@ -41,6 +41,14 @@
 - 用户明确要求在控制台本地缓存账号密码：前端用 `localStorage` 的 `auto-console.login.v1` 保存并恢复输入，不因提交或登录状态变化清空；「清除登录信息」成功后同时移除该缓存并清空表单。不缓存登录协议授权，不向日志、SSE 或命令行暴露凭据。
 
 
+## 版本号
+
+- 根 `package.json` 的 `version` 是桌面壳（`tauri2/`）判断是否有更新的**唯一依据**，每次提交都要能反映变化。
+- `.githooks/pre-commit` 在 **main 分支每次提交前**自动递增 patch（`1.0.0 → 1.0.1`），并同步 `package-lock.json` 的根版本字段，随本次提交一起进入。其他分支、合并 / rebase / cherry-pick 过程中不递增，避免冲突。
+- 需要 major / minor 时先手动执行 `node .githooks/bump-version.mjs minor`（或 `major`）再提交；钩子检测到工作区版本与 HEAD 不同会跳过自动递增，不会叠加两次。
+- 钩子通过本地配置 `git config core.hooksPath .githooks` 启用，**新克隆仓库需执行一次**；临时跳过用 `git commit --no-verify`。
+- `tauri2/package.json` 是壳自身版本，独立于业务版本，不受此钩子影响。
+
 ## 用户浏览器扩展
 
 - 共用 `shared/browser-session.js`；Web 默认优先用户浏览器，CLI/旧 API 未选 `auto` 时继续原方式。Web 仅传固定模式和数字端口，通过环境变量 `AUTO_BROWSER_MODE` / `AUTO_BROWSER_PORT` 交给子进程；继续清空任意外部 `CDP` / `PROFILE`。所有任务通过 IPC 的 `browser-session` 同步实际方式和固定文案回退原因。

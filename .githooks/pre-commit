@@ -1,0 +1,50 @@
+#!/bin/sh
+#
+# main 分支提交前自动递增 package.json 版本号（patch）
+#
+# 启用方式（每个克隆需执行一次，配置不进版本库）：
+#   git config core.hooksPath .githooks
+#
+# 行为：
+#   - 只在 main 分支生效，其他分支原样放行
+#   - 合并 / rebase / cherry-pick 过程中不自动改版本，避免冲突
+#   - 工作区 package.json 已被手动改过（与 HEAD 不同）时跳过，尊重手动指定的版本
+#   - 递增后自动 git add package.json / package-lock.json，随本次提交一起进入
+#   - 跳过：git commit --no-verify
+#
+set -u
+
+branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+[ "$branch" = "main" ] || exit 0
+
+gitdir=$(git rev-parse --git-dir 2>/dev/null) || exit 0
+for mark in MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD; do
+  [ -f "$gitdir/$mark" ] && exit 0
+done
+[ -d "$gitdir/rebase-merge" ] || [ -d "$gitdir/rebase-apply" ] && exit 0
+
+command -v node >/dev/null 2>&1 || {
+  echo "⚠️  未找到 node，跳过自动版本号递增" >&2
+  exit 0
+}
+
+root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+cd "$root" || exit 0
+
+if [ ! -f .githooks/bump-version.mjs ]; then
+  echo "⚠️  缺少 .githooks/bump-version.mjs，跳过自动版本号递增" >&2
+  exit 0
+fi
+
+if ! out=$(node .githooks/bump-version.mjs --auto 2>&1); then
+  # 递增失败不阻塞提交，但要明确告知
+  echo "$out" >&2
+  echo "⚠️  版本号自动递增失败，本次提交的版本号保持不变" >&2
+  exit 0
+fi
+echo "$out"
+
+git add package.json 2>/dev/null
+[ -f package-lock.json ] && git add package-lock.json 2>/dev/null
+
+exit 0
