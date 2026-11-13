@@ -1,0 +1,39 @@
+[package]
+name = "auto-console-shell"
+version = "1.0.0"
+description = "发货控制台桌面壳（零配置一体化）"
+edition = "2021"
+rust-version = "1.75"
+
+[lib]
+name = "auto_console_shell_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-process = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+thiserror = "2"
+chrono = "0.4"
+dirs = "5"
+semver = "1"
+tempfile = "3"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "blocking"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+# Unix 信号处理：SIGTERM / SIGINT / SIGHUP 也要优雅关闭业务服务子进程。
+# 信号终止不会触发 Tauri 的 RunEvent::Exit，缺了它就会留下孤儿 node 占住端口。
+[target.'cfg(unix)'.dependencies]
+signal-hook = "0.3"
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
