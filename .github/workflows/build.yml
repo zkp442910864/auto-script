@@ -44,9 +44,12 @@ jobs:
         include:
           - platform: macos-latest
             args: '--target universal-apple-darwin'
+            bundles: ''
             artifact: macos-universal
           - platform: windows-latest
             args: ''
+            # NSIS 原生支持 Unicode，装中文产品名没问题，先保底出 exe 安装包
+            bundles: '--bundles nsis'
             artifact: windows-x64
 
     runs-on: ${{ matrix.platform }}
@@ -85,7 +88,17 @@ jobs:
         working-directory: tauri2
         env:
           RUST_BACKTRACE: 1
-        run: pnpm tauri build ${{ matrix.args }}
+        run: pnpm tauri build ${{ matrix.args }} ${{ matrix.bundles }}
+
+      # MSI 由 WiX 生成，对非 Latin 字符敏感（需要 zh-CN 代码页）。
+      # 失败不阻塞：exe 安装包已由上一步产出，这里只是尽量多给一个 msi。
+      - name: Build MSI (best effort)
+        if: matrix.platform == 'windows-latest'
+        continue-on-error: true
+        working-directory: tauri2
+        env:
+          RUST_BACKTRACE: 1
+        run: pnpm tauri build --bundles msi
 
       - name: Collect bundles
         shell: bash

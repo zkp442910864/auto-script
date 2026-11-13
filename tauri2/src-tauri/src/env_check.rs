@@ -189,6 +189,7 @@ fn emit_log(app: &AppHandle, line: &str) {
 }
 
 /// 同步 GET 文本内容。
+#[cfg_attr(target_os = "windows", allow(dead_code))] // Windows 走 winget，不需要拉取文本
 fn fetch_text(url: &str) -> anyhow::Result<String> {
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(30))
