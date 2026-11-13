@@ -173,11 +173,14 @@ jobs:
 
           # 版本号没变却要发版（例如合并提交跳过了版本自增、或 --no-verify 提交），
           # 就把短 SHA 拼到标签上，避免把上一版 Release 的附件直接覆盖掉。
+          # 坑：ref 不存在时 gh api 以 422 退出，但仍把错误 JSON 打到 stdout，
+          # 所以只能用 if 取退出码判断；写成 `$(... || true)` 会把 {"message":...} 当成 SHA。
           if [ -z "${{ inputs.tag }}" ]; then
-            EXISTING_SHA=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${TAG}" --jq .sha 2>/dev/null || true)
-            if [ -n "$EXISTING_SHA" ] && [ "$EXISTING_SHA" != "$GITHUB_SHA" ]; then
-              echo "⚠️ 标签 ${TAG} 已指向 ${EXISTING_SHA:0:7}，改用带短 SHA 的标签"
-              TAG="${TAG}-${SHORT}"
+            if EXISTING_SHA=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${TAG}" --jq .sha 2>/dev/null); then
+              if [ -n "$EXISTING_SHA" ] && [ "$EXISTING_SHA" != "$GITHUB_SHA" ]; then
+                echo "⚠️ 标签 ${TAG} 已指向 ${EXISTING_SHA:0:7}，改用带短 SHA 的标签"
+                TAG="${TAG}-${SHORT}"
+              fi
             fi
           fi
 

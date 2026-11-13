@@ -1,7 +1,7 @@
 {
   "name": "shipping-automation-console",
   "private": true,
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "发货与装箱自动化本地控制台",
   "engines": { "node": ">=18" },
   "scripts": {
