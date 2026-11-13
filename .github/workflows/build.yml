@@ -1,15 +1,40 @@
 name: build
 
-# 打包桌面壳（tauri2/）：
-# - macOS：universal（Apple Silicon + Intel），产出 .app / .dmg
-# - Windows：x86_64，产出 .msi / .exe（NSIS）
-# 手动触发（Actions 页面 Run workflow）或打 v* tag 触发；产物在 workflow 的 Artifacts 里。
+# 打包桌面壳（tauri2/）
+#   macOS   → universal（Apple Silicon + Intel）：.dmg + .app.zip
+#   Windows → x86_64：.msi + .exe（NSIS）
+#
+# 触发条件：
+#   1. push 到 main 且改动涉及 tauri2/（只改业务代码不触发）
+#   2. 推送 shell-v* 标签 → 构建并自动创建 GitHub Release
+#   3. 手动触发（Actions 页面 Run workflow），可勾选「创建 Release」
 
 on:
   workflow_dispatch:
+    inputs:
+      release:
+        description: '构建完成后创建 GitHub Release'
+        type: boolean
+        default: false
+      tag:
+        description: 'Release 标签（留空则用 shell-v + tauri2 版本号）'
+        type: string
+        required: false
   push:
+    branches:
+      - main
     tags:
-      - 'v*'
+      - 'shell-v*'
+    paths:
+      - 'tauri2/**'
+      - '.github/workflows/build.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -58,18 +83,23 @@ jobs:
 
       - name: Build
         working-directory: tauri2
+        env:
+          RUST_BACKTRACE: 1
         run: pnpm tauri build ${{ matrix.args }}
 
       - name: Collect bundles
         shell: bash
         run: |
+          set -e
           mkdir -p out
           find tauri2/src-tauri/target -type f \
             \( -name '*.dmg' -o -name '*.msi' -o -name '*.exe' \) \
             -exec cp {} out/ \;
-          # macOS 的 .app 是目录，压成 zip 便于下载
-          find tauri2/src-tauri/target -maxdepth 4 -type d -name '*.app' -exec sh -c 'cd "$(dirname "$1")" && ditto -c -k --keepParent "$(basename "$1")" "/tmp/$(basename "$1").zip"' _ {} \;
-          cp /tmp/*.app.zip out/ 2>/dev/null || true
+          # macOS 的 .app 是目录，压成 zip 便于分发
+          find tauri2/src-tauri/target -maxdepth 4 -type d -name '*.app' | while read -r app; do
+            ( cd "$(dirname "$app")" && ditto -c -k --keepParent "$(basename "$app")" "/tmp/$(basename "$app").zip" )
+            cp "/tmp/$(basename "$app").zip" out/
+          done
           ls -lh out
 
       - uses: actions/upload-artifact@v4
@@ -78,3 +108,90 @@ jobs:
           path: out/*
           if-no-files-found: error
           retention-days: 30
+
+  release:
+    needs: build
+    # 打标签推送，或手动触发时勾选了「创建 Release」
+    if: startsWith(github.ref, 'refs/tags/shell-v') || inputs.release
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Resolve tag
+        id: meta
+        shell: bash
+        run: |
+          set -e
+          VERSION=$(node -p "require('./tauri2/package.json').version")
+          if [ -n "${{ inputs.tag }}" ]; then
+            TAG="${{ inputs.tag }}"
+          elif [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+          else
+            TAG="shell-v${VERSION}"
+          fi
+          case "$TAG" in shell-v*) ;; *) TAG="shell-v${TAG}" ;; esac
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "解析结果：$TAG（tauri2 版本 $VERSION）"
+
+      - name: List assets
+        shell: bash
+        run: ls -lh dist
+
+      - name: Create or update Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          TAG="${{ steps.meta.outputs.tag }}"
+          VERSION="${{ steps.meta.outputs.version }}"
+
+          cat > notes.md <<EOF
+          ## 发货控制台 v${VERSION}
+
+          Tauri 2 桌面壳：双击启动，自动检查环境 → 拉取业务代码 → 安装依赖 → 启动本地服务 → 打开网页。
+
+          ### 下载
+
+          | 平台 | 文件 |
+          |------|------|
+          | macOS（Apple Silicon + Intel） | .dmg 或 .app.zip |
+          | Windows 10/11 x64 | .msi 或 .exe |
+
+          ### 安装说明
+
+          - **macOS**：安装包未做 Apple 公证。首次打开若提示「已损坏」或「无法验证开发者」，
+            在终端执行 `xattr -dr com.apple.quarantine "/Applications/发货控制台.app"`，或右键 →「打开」。
+          - **Windows**：未做代码签名，SmartScreen 可能提示，点「更多信息」→「仍要运行」。
+
+          ### 说明
+
+          - 应用本体不打包 Node.js，首次启动会检测环境，缺失时引导安装（winget / brew / apt）。
+          - 业务代码首次启动自动下载到「应用数据目录/business」，之后点击「检查更新」增量更新。
+          EOF
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG 已存在，覆盖附件"
+            gh release upload "$TAG" dist/* --clobber
+            gh release edit "$TAG" --notes-file notes.md
+          else
+            echo "创建 Release $TAG"
+            gh release create "$TAG" dist/* \
+              --title "发货控制台 ${TAG}" \
+              --notes-file notes.md \
+              --target "$GITHUB_SHA"
+          fi
+          gh release view "$TAG" --json url --jq .url
