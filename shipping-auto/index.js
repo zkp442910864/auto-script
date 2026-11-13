@@ -679,8 +679,8 @@ async function locateFloatingButton(page, hintRe, positiveRe) {
 async function findJoinDialog(page) {
   return locateFloatingButton(
     page,
-    /本次.{0,6}发货|确认创建发货单|确认批量发货|同仓库|加入其他|一并加入|发货数一致/,
-    /发货数一致|取消其他|去创建发货单|继续创建|确认创建|继续合并|^(确认|确定|加入|继续)$/
+    /本次.{0,6}发货|确认创建发货单|确认批量发货|同仓库|加入其他|一并加入|发货数一致|是否同步创建发货单/,
+    /发货数一致|取消其他|去创建发货单|继续创建|确认创建|继续合并|^同步创建$|^(确认|确定|加入|继续)$/
   );
 }
 
@@ -1015,6 +1015,10 @@ async function createShippingOrder(page) {
   let sawCreatePage = false;
   for (let i = 0; i < 6; i++) {
     if (await tryHandleJoinDialog(page, i === 0 ? '创建前' : `第${i + 1}次`)) continue;
+    if (await findJoinDialog(page)) {
+      log('✗ 创建前确认框未处理，停止并保留现场');
+      return false;
+    }
     if (await firstVisible(page.getByText('发货仓库'))) {
       sawCreatePage = true;
       break;

@@ -70,6 +70,10 @@ const EDIT_BUBBLE_HTML = `
   const j = await api1.findJoinDialog(page);
   check('批量发货确认弹窗', j && j.label, '取消其他，去创建发货单');
 
+  await page.setContent(MODAL_HTML.replace('本次计划发货 37 件，确认批量发货吗？', '该收货仓库还有4个备货单，是否同步创建发货单？').replace('取消其他，去创建发货单', '同步创建'));
+  const sync = await api1.findJoinDialog(page);
+  check('同步创建弹窗', sync && sync.label, '同步创建');
+
   // 2) 确认创建气泡
   await page.setContent(BUBBLE_HTML);
   const api2 = factory(page);
