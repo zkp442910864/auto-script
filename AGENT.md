@@ -43,11 +43,27 @@
 
 ## 版本号
 
-- 根 `package.json` 的 `version` 是桌面壳（`tauri2/`）判断是否有更新的**唯一依据**，每次提交都要能反映变化。
-- `.githooks/pre-commit` 在 **main 分支每次提交前**自动递增 patch（`1.0.0 → 1.0.1`），并同步 `package-lock.json` 的根版本字段，随本次提交一起进入。其他分支、合并 / rebase / cherry-pick 过程中不递增，避免冲突。
-- 需要 major / minor 时先手动执行 `node .githooks/bump-version.mjs minor`（或 `major`）再提交；钩子检测到工作区版本与 HEAD 不同会跳过自动递增，不会叠加两次。
-- 钩子通过本地配置 `git config core.hooksPath .githooks` 启用，**新克隆仓库需执行一次**；临时跳过用 `git commit --no-verify`。
-- `tauri2/package.json` 是壳自身版本，独立于业务版本，不受此钩子影响。
+两套版本号，互不替代。
+
+- 根 `package.json` 的 `version` 是业务版本，也是桌面壳（`tauri2/`）判断「业务代码有没有更新」的**唯一依据**，每次 main 提交都要能反映变化。
+- `tauri2/package.json` 的 `version` 是桌面壳版本，决定 Release 标签 `shell-v<版本>` 与安装包版本。
+- `.githooks/pre-commit` 在 **main 分支每次提交前**自动递增业务 patch（`1.0.6 → 1.0.7`），并同步 `package-lock.json` 的根版本字段，随本次提交一起进入。其他分支、合并 / rebase / cherry-pick 过程中不递增，避免冲突。
+- 本次提交的暂存区包含 `tauri2/` 改动时，钩子**额外**递增壳版本，四处必须一致：`tauri2/package.json`、`tauri2/src-tauri/tauri.conf.json`、`tauri2/src-tauri/Cargo.toml`、`tauri2/src-tauri/Cargo.lock`。禁止只改其中一处，否则安装包版本与 Release 标签对不上。
+- 需要 major / minor 时先手动执行 `node .githooks/bump-version.mjs minor`（或 `major`）再提交；钩子检测到工作区版本与 HEAD 不同会跳过自动递增，不会叠加两次。`node .githooks/bump-version.mjs --shell` 强制连壳版本一起递增。
+- 钩子通过本地配置 `git config core.hooksPath .githooks` 启用，**新克隆仓库需执行一次**；临时跳过用 `git commit --no-verify`，但业务版本不会变，壳的「检查更新」会一直认为已是最新。
+
+## 桌面壳与发版
+
+`tauri2/` 是 Tauri 2 桌面壳，用法、契约与排查见 [`tauri2/docs.md`](tauri2/docs.md)。以下是改代码时的硬约束。
+
+- 零配置是产品定位：没有设置页、没有配置文件、没有目录选择对话框。仓库地址、分支、端口、入口文件、健康检查路径全部写死在 `tauri2/src-tauri/src/config.rs`。禁止新增可配置项、`settings` 模块或 `plugin-dialog`；`cargo test` 里有契约测试会直接失败。
+- 业务代码不进安装包：首次启动从 GitHub 下载 archive 到应用数据目录下的 `business/`。禁止把业务代码复制进 `tauri2/`，也禁止把业务逻辑写进壳。
+- 前后端契约两侧必须一致：前端 `tauri2/src/api.ts` 的 `invoke('<name>')`、`tauri2/src/App.tsx` 的 `listen('<event>')`，后端 `lib.rs` 的 `generate_handler!` 与 `emit`。改任一侧都要同步另一侧并运行 `cargo test`（74 个用例）。注意事件那条契约只做字面量搜索——Rust 源码里出现事件名即通过，写在注释里也算——不能代替人工确认 `emit` 真的在发。
+- 所有子进程在 `spawn()` 前必须调用 `path_env::prepare_command`：补装 Node.js 后当前进程的 PATH 不会刷新，漏掉就会出现「明明装了 node 却找不到」。
+- 更新是覆盖式：受保护路径（`.pw-profile/`、`shots/`、`.web-runs/`、`.login-state.json`、任意层级 `node_modules` 与 `.git`）绝不覆盖或删除；zip 条目命中 `..`、绝对路径、盘符、UNC、Windows ADS 时**整包中止**，禁止降级成「跳过该条目继续」。
+- CI 只在改动命中 `tauri2/**` 时构建，并自动创建/更新 Release。过滤器是路径前缀，不按扩展名区分：只改业务代码或 `tauri2/` **之外**的文档不触发，但 `tauri2/` 下任何文件（**含 `tauri2/docs.md` 这类文档本身**）都会构建并发版。
+- 产物：三个稳定件 `macos-universal.dmg`、`macos-universal.app.zip`、`windows-x64-setup.exe`，加一个 best-effort 的 `windows-x64.msi`（WiX 打包失败不中断流程，可能不存在）。标签 `shell-v<壳版本>`。Linux 没有安装包。CI 没有测试门禁（不跑 `cargo test`、不跑 `pnpm typecheck`），「CI 绿」不等于用例通过。
+- 安装包未签名、未公证是既有事实，不要试图在 CI 里「修」它。macOS 提示「已损坏」时用 `xattr -dr com.apple.quarantine "/Applications/发货控制台.app"`，Windows 走「更多信息」→「仍要运行」。
 
 ## 用户浏览器扩展
 

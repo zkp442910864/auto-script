@@ -3,6 +3,8 @@
 统一操作 `login-auto`（登录与前置准备）、`shipping-auto`（创建发货单）和 `packing-auto`（装箱发货）。
 提供快照、测试演练、正式执行、实时日志、截图预览和日志下载。
 
+本项目同时附带桌面壳（Tauri 2，位于 `tauri2/`），可打成 macOS / Windows 安装包，双击即用：自动检查环境、拉取业务代码、安装依赖、启动本地服务，就绪后在界面点「在浏览器中打开」进入控制台。壳的用法与排查见 [`tauri2/docs.md`](tauri2/docs.md)。
+
 ## 启动
 
 需要 Node.js 18+、本机已安装 Google Chrome。
@@ -76,6 +78,17 @@ Web 会记住当前控制台地址下的浏览器方式和端口。旧 API 请�
 
 控制台仅绑定本机 `127.0.0.1`，用于运行当前电脑上的脚本。独立方式下，Web 调用的快照、测试和正式执行会在完成后关闭浏览器，释放登录目录；登录准备和主动快照会持续保留窗口，直到用户关闭或停止。连接用户浏览器时，完成或停止仅断开连接，保留浏览器及其标签页。原有 `shipping-auto` 命令行行为保持不变，新增 `--close-browser` 参数可启用相同清理逻辑。
 
+## 桌面壳（tauri2）
+
+`tauri2/` 把本项目打包成桌面 App：双击启动，自动完成「检查环境 → 拉取业务代码 → 安装依赖 → 启动本地服务」，就绪后在壳的界面上点「在浏览器中打开」进入控制台。壳的界面没有设置项，仓库地址、分支、端口都写死在代码里。
+
+- 安装包从 <https://github.com/zkp442910864/auto-script/releases> 下载：macOS 用 `macos-universal.dmg`（或 `macos-universal.app.zip`），Windows 用 `windows-x64-setup.exe`（`windows-x64.msi` 为尽力产出，可能没有）。只有改动涉及 `tauri2/` 时才会构建并自动发版。
+- 首次启动：检测 Node.js（要求 18+，缺失时环境卡片里只有「安装 Node.js」一个按钮），把 `main` 分支的业务代码下载到应用数据目录下的 `business/`，执行 `npm run setup`，再启动本地服务做健康检查。之后每次启动复用已有代码与依赖，通常几秒就绪。
+- 业务代码位置：macOS `~/Library/Application Support/com.koudouma.autoconsole/business`，Windows `%APPDATA%\com.koudouma.autoconsole\business`。顶栏「打开业务目录」可直接打开，同级的 `console.log` 是全部日志。
+- 更新：点「检查更新」，比较的是根 `package.json` 的 `version`，不更换壳自身。覆盖更新不会动登录态、截图与运行日志，并在应用数据目录的 `backups/` 保留最近一次备份。
+- 安装包未签名、未公证。macOS 提示「已损坏」时执行 `xattr -dr com.apple.quarantine "/Applications/发货控制台.app"`，或右键 →「打开」；Windows SmartScreen 提示时点「更多信息」→「仍要运行」。
+- 要改壳本身（模块职责、前后端命令与事件契约、更新解压的安全约束、打包与发版），见 [`tauri2/docs.md`](tauri2/docs.md)。
+
 ## 开发与验证
 
 ```bash
@@ -92,10 +105,15 @@ npm run test:packing  # 用本机 Chrome 对本地模拟页面验证装箱入口
 web/
   server.js          Node HTTP 服务、任务调度、SSE、日志和截图接口
   server.test.js     使用 node:test 的集成测试
+  manual-snapshot.js 主动快照模式的 IPC 子进程
   public/            原生 HTML / CSS / JavaScript 控制台
+shared/              浏览器会话共用逻辑与集成测试
 shipping-auto/       原有创建发货单脚本及 docs.md
 packing-auto/        原有装箱发货脚本及 docs.md
 login-auto/          独立登录与前置准备脚本，复用现有 Playwright 依赖
+tauri2/              Tauri 2 桌面壳及 docs.md
+.githooks/           提交时自动递增版本号（bump-version.mjs、pre-commit）
+.github/workflows/   CI：tauri2 变更即构建安装包并发布 Release
 AGENT.md             项目与代理开发说明
 ```
 

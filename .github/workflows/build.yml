@@ -210,7 +210,7 @@ jobs:
           | 平台 | 文件 |
           |------|------|
           | macOS（Apple Silicon + Intel） | macos-universal.dmg / macos-universal.app.zip |
-          | Windows 10/11 x64 | windows-x64-setup.exe / windows-x64.msi |
+          | Windows 10/11 x64 | windows-x64-setup.exe / windows-x64.msi（如可用） |
 
           ### 安装说明
 
