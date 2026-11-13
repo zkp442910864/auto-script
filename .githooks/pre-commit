@@ -10,6 +10,8 @@
 #   - 合并 / rebase / cherry-pick 过程中不自动改版本，避免冲突
 #   - 工作区 package.json 已被手动改过（与 HEAD 不同）时跳过，尊重手动指定的版本
 #   - 递增后自动 git add package.json / package-lock.json，随本次提交一起进入
+#   - 本次提交包含 tauri2/ 改动时，额外递增桌面壳版本（tauri2/package.json、
+#     tauri.conf.json、Cargo.toml、Cargo.lock），它是 Release 标签 shell-v<版本> 的来源
 #   - 跳过：git commit --no-verify
 #
 set -u
@@ -46,5 +48,9 @@ echo "$out"
 
 git add package.json 2>/dev/null
 [ -f package-lock.json ] && git add package-lock.json 2>/dev/null
+
+# 本次提交包含 tauri2/ 改动时，脚本已把桌面壳的四处版本号一起改了，同样随提交入库
+git add tauri2/package.json tauri2/src-tauri/tauri.conf.json \
+  tauri2/src-tauri/Cargo.toml tauri2/src-tauri/Cargo.lock 2>/dev/null
 
 exit 0

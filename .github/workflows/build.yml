@@ -1,21 +1,25 @@
 name: build
 
-# 打包桌面壳（tauri2/）
+# 打包桌面壳（tauri2/）并发布 Release
 #   macOS   → universal（Apple Silicon + Intel）：.dmg + .app.zip
-#   Windows → x86_64：.msi + .exe（NSIS）
+#   Windows → x86_64：.exe（NSIS）+ .msi
 #
 # 触发条件：
-#   1. push 到 main 且改动涉及 tauri2/（只改业务代码不触发）
-#   2. 推送 shell-v* 标签 → 构建并自动创建 GitHub Release
-#   3. 手动触发（Actions 页面 Run workflow），可勾选「创建 Release」
+#   1. push 到 main，且改动涉及 tauri2/ → 构建 + 自动创建/更新 GitHub Release
+#      （只改业务代码、文档等 tauri2/ 之外的内容不触发）
+#   2. 手动触发（Actions 页面 Run workflow），默认同样发版，可取消勾选只出包
+#
+# 版本与标签：标签取 shell-v + tauri2/package.json 的 version。
+# pre-commit 钩子在每次提交时递增该版本号，所以一次 tauri2 提交 = 一个 Release。
+# 注意：workflow 用 GITHUB_TOKEN 创建的标签/Release 不会再次触发工作流，不存在循环。
 
 on:
   workflow_dispatch:
     inputs:
       release:
-        description: '构建完成后创建 GitHub Release'
+        description: '构建完成后创建/更新 GitHub Release'
         type: boolean
-        default: false
+        default: true
       tag:
         description: 'Release 标签（留空则用 shell-v + tauri2 版本号）'
         type: string
@@ -23,11 +27,8 @@ on:
   push:
     branches:
       - main
-    tags:
-      - 'shell-v*'
     paths:
       - 'tauri2/**'
-      - '.github/workflows/build.yml'
 
 permissions:
   contents: write
@@ -136,8 +137,8 @@ jobs:
 
   release:
     needs: build
-    # 打标签推送，或手动触发时勾选了「创建 Release」
-    if: startsWith(github.ref, 'refs/tags/shell-v') || inputs.release
+    # push 到 main 且动了 tauri2/ 就发版；手动触发时看勾选
+    if: github.event_name == 'push' || inputs.release
     runs-on: ubuntu-latest
 
     steps:
@@ -156,20 +157,34 @@ jobs:
       - name: Resolve tag
         id: meta
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -e
           VERSION=$(node -p "require('./tauri2/package.json').version")
+          SHORT="${GITHUB_SHA:0:7}"
+
           if [ -n "${{ inputs.tag }}" ]; then
             TAG="${{ inputs.tag }}"
-          elif [[ "$GITHUB_REF" == refs/tags/* ]]; then
-            TAG="${GITHUB_REF#refs/tags/}"
           else
             TAG="shell-v${VERSION}"
           fi
           case "$TAG" in shell-v*) ;; *) TAG="shell-v${TAG}" ;; esac
+
+          # 版本号没变却要发版（例如合并提交跳过了版本自增、或 --no-verify 提交），
+          # 就把短 SHA 拼到标签上，避免把上一版 Release 的附件直接覆盖掉。
+          if [ -z "${{ inputs.tag }}" ]; then
+            EXISTING_SHA=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${TAG}" --jq .sha 2>/dev/null || true)
+            if [ -n "$EXISTING_SHA" ] && [ "$EXISTING_SHA" != "$GITHUB_SHA" ]; then
+              echo "⚠️ 标签 ${TAG} 已指向 ${EXISTING_SHA:0:7}，改用带短 SHA 的标签"
+              TAG="${TAG}-${SHORT}"
+            fi
+          fi
+
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "解析结果：$TAG（tauri2 版本 $VERSION）"
+          echo "short=$SHORT" >> "$GITHUB_OUTPUT"
+          echo "解析结果：$TAG（tauri2 版本 $VERSION，提交 $SHORT）"
 
       - name: List assets
         shell: bash
@@ -183,11 +198,12 @@ jobs:
           set -e
           TAG="${{ steps.meta.outputs.tag }}"
           VERSION="${{ steps.meta.outputs.version }}"
+          SHORT="${{ steps.meta.outputs.short }}"
 
           cat > notes.md <<EOF
           ## 发货控制台 v${VERSION}
 
-          Tauri 2 桌面壳：双击启动，自动检查环境 → 拉取业务代码 → 安装依赖 → 启动本地服务 → 打开网页。
+          构建自提交 \`${SHORT}\`。Tauri 2 桌面壳：双击启动，自动检查环境 → 拉取业务代码 → 安装依赖 → 启动本地服务 → 打开网页。
 
           ### 下载
 
@@ -205,17 +221,17 @@ jobs:
           ### 说明
 
           - 应用本体不打包 Node.js，首次启动会检测环境，缺失时引导安装（winget / brew / apt）。
-          - 业务代码首次启动自动下载到「应用数据目录/business」，之后点击「检查更新」增量更新。
+          - 业务代码首次启动自动下载到「应用数据目录/business」，之后点「检查更新」按需更新。
           EOF
 
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Release $TAG 已存在，覆盖附件"
             gh release upload "$TAG" dist/* --clobber
-            gh release edit "$TAG" --notes-file notes.md
+            gh release edit "$TAG" --notes-file notes.md --title "发货控制台 v${VERSION}"
           else
             echo "创建 Release $TAG"
             gh release create "$TAG" dist/* \
-              --title "发货控制台 ${TAG}" \
+              --title "发货控制台 v${VERSION}" \
               --notes-file notes.md \
               --target "$GITHUB_SHA"
           fi
