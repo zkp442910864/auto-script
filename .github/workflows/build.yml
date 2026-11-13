@@ -102,18 +102,30 @@ jobs:
 
       - name: Collect bundles
         shell: bash
+        env:
+          ARTIFACT: ${{ matrix.artifact }}
         run: |
-          set -e
+          set -euo pipefail
           mkdir -p out
-          find tauri2/src-tauri/target -type f \
-            \( -name '*.dmg' -o -name '*.msi' -o -name '*.exe' \) \
+
+          # 只从 bundle 产物目录取件，避免把裸二进制 / build script 之类的中间 exe 混进发布包
+          find tauri2/src-tauri/target -type f -path '*/release/bundle/*' \
+            \( -name '*.dmg' -o -name '*.msi' -o -name '*-setup.exe' \) \
             -exec cp {} out/ \;
+
           # macOS 的 .app 是目录，压成 zip 便于分发
-          find tauri2/src-tauri/target -maxdepth 4 -type d -name '*.app' | while read -r app; do
-            ( cd "$(dirname "$app")" && ditto -c -k --keepParent "$(basename "$app")" "/tmp/$(basename "$app").zip" )
-            cp "/tmp/$(basename "$app").zip" out/
+          find tauri2/src-tauri/target -maxdepth 6 -type d -path '*/release/bundle/macos/*.app' | while read -r app; do
+            ( cd "$(dirname "$app")" && ditto -c -k --keepParent "$(basename "$app")" "/tmp/app-bundle.zip" )
+            cp /tmp/app-bundle.zip "out/${ARTIFACT}.app.zip"
           done
-          ls -lh out
+
+          # 统一改成 ASCII 文件名：GitHub 的 artifact / release 会吞掉中文，导致附件名残缺
+          cd out
+          for f in *.dmg;  do [ -e "$f" ] && mv -f "$f" "${ARTIFACT}.dmg"; done
+          for f in *.msi;  do [ -e "$f" ] && mv -f "$f" "${ARTIFACT}.msi"; done
+          for f in *-setup.exe; do [ -e "$f" ] && mv -f "$f" "${ARTIFACT}-setup.exe"; done
+
+          ls -lh
 
       - uses: actions/upload-artifact@v4
         with:
@@ -181,8 +193,8 @@ jobs:
 
           | 平台 | 文件 |
           |------|------|
-          | macOS（Apple Silicon + Intel） | .dmg 或 .app.zip |
-          | Windows 10/11 x64 | .msi 或 .exe |
+          | macOS（Apple Silicon + Intel） | macos-universal.dmg / macos-universal.app.zip |
+          | Windows 10/11 x64 | windows-x64-setup.exe / windows-x64.msi |
 
           ### 安装说明
 
