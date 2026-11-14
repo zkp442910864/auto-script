@@ -279,6 +279,7 @@ async function findConfirmDialog(page, stage) {
     : [
       { text: /确认包裹和发货数/, button: /^去装箱发货$/, reminder: true },
       { text: /发货\s*\/\s*收货详细地址[\s\S]*均相同/, button: /^一起发货$/, merge: true },
+      { text: /易破损[\s\S]*确认装箱发货[？?]/, button: /^确认$/ },
       { text: /同(?:一)?仓库|一起装箱/, button: /^(确认|确定|继续|确认装箱|一起装箱|确认合并)$/ },
     ];
   for (const spec of specs) {

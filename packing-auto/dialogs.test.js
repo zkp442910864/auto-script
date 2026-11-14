@@ -86,6 +86,22 @@ test('无提示时直接识别抽屉；旧同仓库提示仍能确认', async (t
   assert.equal(await waitDrawer(page, 2000), true);
 });
 
+test('易破损提示只点击弹窗内的确认，然后进入抽屉', async (t) => {
+  const page = await localPage(t, `<button>确认</button><div data-testid="beast-core-modal">
+    <div>已选 1 个发货单，其中以下 1 个<span>易破损</span>，请做好包装防护。</div>
+    <div>确认装箱发货？</div><button>确认</button><button>取消</button></div>`);
+  await page.evaluate((form) => {
+    window.outsideClicked = false;
+    document.querySelector('body > button').onclick = () => { window.outsideClicked = true; };
+    document.querySelector('[data-testid="beast-core-modal"] button').onclick = () => {
+      document.querySelector('[data-testid="beast-core-modal"]').remove();
+      document.body.insertAdjacentHTML('beforeend', form);
+    };
+  }, drawer);
+  assert.equal(await waitDrawer(page, 2000), true);
+  assert.equal(await page.evaluate(() => window.outsideClicked), false);
+});
+
 for (const dry of [false, true]) {
   test(`同地址合并后等待列表刷新，再次点击批量按钮（${dry ? '演练' : '正式'}模式）`, async (t) => {
     const selectedRows = (merged) => `<table><tbody>
