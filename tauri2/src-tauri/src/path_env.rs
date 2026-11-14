@@ -108,12 +108,27 @@ pub fn enhanced_path() -> String {
         .unwrap_or_default()
 }
 
-/// 为子进程命令注入增强版 PATH。
+/// 为子进程命令注入增强版 PATH，并在 Windows 下隐藏子进程控制台窗口。
 ///
 /// # 约定
-/// 本项目中任何 `Command::new(...)` 在 `spawn()` 之前都必须调用本函数。
+/// 本项目中任何 `Command::new(...)` 在 `spawn()` / `output()` 之前都必须调用本函数。
+///
+/// # Windows 静默执行
+/// release 构建是 GUI 子系统进程（`windows_subsystem = "windows"`，见 main.rs），
+/// 自身没有控制台。此时每个控制台子进程（node、taskkill、winget……）都会由系统
+/// **新开一个可见的 cmd 窗口**。给子进程加 `CREATE_NO_WINDOW` 标志即可静默执行，
+/// stdout/stderr 仍可通过 `Stdio::piped()` 正常读取，不影响日志转发。
 pub fn prepare_command(command: &mut Command) {
     command.env("PATH", enhanced_path());
+
+    // CREATE_NO_WINDOW = 0x0800_0000：子进程不分配控制台窗口。
+    // （仅 Windows 有效；注意孙进程——如 node 内部再 spawn 的进程——需在其
+    //   自身调用处另行设置 windowsHide: true / 同样标志，本函数管不到。）
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000);
+    }
 }
 
 #[cfg(test)]

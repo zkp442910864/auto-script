@@ -1,6 +1,6 @@
 [package]
 name = "auto-console-shell"
-version = "1.0.1"
+version = "1.0.2"
 description = "发货控制台桌面壳（零配置一体化）"
 edition = "2021"
 rust-version = "1.75"

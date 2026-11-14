@@ -212,7 +212,7 @@ zip 条目名的唯一入口是 `resolve_entry_path`，返回值分三种：`Ok(
 
 ## 8. 环境检查与 PATH
 
-这是本壳最容易翻车的点：补装 Node.js 之后，**当前进程的 PATH 不会自动刷新**。因此全仓约定——任何 `Command::new(...)` 在 `spawn()` 之前必须调用 `path_env::prepare_command`。
+这是本壳最容易翻车的点：补装 Node.js 之后，**当前进程的 PATH 不会自动刷新**。因此全仓约定——任何 `Command::new(...)` 在 `spawn()` / `output()` 之前必须调用 `path_env::prepare_command`。该函数在 Windows 下还会给子进程加 `CREATE_NO_WINDOW`（0x0800_0000）：release 构建是 GUI 子系统进程、自身没有控制台，不加该标志时每个控制台子进程（node、taskkill、winget……）都会新开一个可见的命令行窗口；stdout/stderr 经 `Stdio::piped()` 读取不受影响。
 
 候选目录顺序（前置优先，去重保序）：
 
@@ -330,6 +330,7 @@ CI（`.github/workflows/build.yml`）：
 | 服务意外退出（退出码 N） | 业务脚本崩溃或被杀 | 界面进入「初始化失败」，点「重试」等价于重启服务；再不行看 `[server]` 日志 |
 | macOS 提示「已损坏」/「无法验证开发者」 | 未公证 | `xattr -dr com.apple.quarantine "/Applications/发货控制台.app"`，或右键 →「打开」 |
 | Windows SmartScreen 拦截 | 未签名 | 「更多信息」→「仍要运行」 |
+| Windows 运行时弹出黑色命令行窗口 | release 构建是 GUI 子系统，控制台子进程各自新开控制台 | 已在 `path_env::prepare_command` 统一加 `CREATE_NO_WINDOW`；若仍有弹窗，说明有绕过 `prepare_command` 的新 spawn（或 node 内部孙进程，需 `windowsHide: true`），逐个补上 |
 | 「检查更新」提示「业务代码尚未初始化完成」 | 入口文件不存在 | 先把初始化跑完（或点「重试」） |
 | 更新后版本号没变、页面还是旧的 | 业务 `package.json` 的 `version` 没递增（`--no-verify` 提交） | 手动 `node .githooks/bump-version.mjs` 后提交，再检查更新 |
 | 更新报「更新包结构异常」 | 仓库打包方式变化，zip 里同时有根级文件和 `x-y/` 目录 | 检查仓库 archive 结构；壳会拒绝整包，业务代码保持更新前状态 |
